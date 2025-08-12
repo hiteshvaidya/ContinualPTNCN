@@ -100,29 +100,29 @@ class PTNCN:
 
         # initialize the activation function
         self.act_fx = None
-        if self.act_fun is "gelu":
+        if self.act_fun == "gelu":
             self.act_fx = gelu1
-        elif self.act_fun is "relu6":
+        elif self.act_fun == "relu6":
             self.act_fx = tf.nn.relu6
-        elif self.act_fun is "relu":
+        elif self.act_fun == "relu":
             self.act_fx = tf.nn.relu
-        elif self.act_fun is "sigmoid":
+        elif self.act_fun == "sigmoid":
             self.act_fx = tf.nn.sigmoid
-        elif self.act_fun is "sign":
+        elif self.act_fun == "sign":
             self.act_fx = tf.sign
-        elif self.act_fun is "tanh":
+        elif self.act_fun == "tanh":
             self.act_fx = tf.nn.tanh
-        elif self.act_fun is "ltanh":
+        elif self.act_fun == "ltanh":
             self.act_fx = ltanh
         else:
             self.act_fx = gte
 
         self.out_fx = tf.identity
-        if out_fun is "softmax":
+        if out_fun == "softmax":
             self.out_fx = softmax
-        elif out_fun is "tanh":
+        elif out_fun == "tanh":
             self.out_fx = tf.nn.tanh
-        elif out_fun is "sigmoid":
+        elif out_fun == "sigmoid":
             self.out_fx = tf.nn.sigmoid
 
     def act_dx(self, h, z):

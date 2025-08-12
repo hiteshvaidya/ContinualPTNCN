@@ -44,9 +44,9 @@ def softmax(x):
 	"""
 		Softmax function with overflow control built in directly
 	"""
-    max_x = tf.expand_dims( tf.reduce_max(x, axis=1), axis=1)
-    exp_x = tf.exp(tf.subtract(x, max_x))
-    return exp_x / tf.expand_dims( tf.reduce_sum(exp_x, axis=1), axis=1)
+	max_x = tf.expand_dims(tf.reduce_max(x, axis=1), axis=1)
+	exp_x = tf.exp(tf.subtract(x, max_x))
+	return exp_x / tf.expand_dims(tf.reduce_sum(exp_x, axis=1), axis=1)
 
 def convert_to_multihot(ind, zero_pad):
 	vec = zero_pad.numpy()

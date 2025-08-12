@@ -213,13 +213,13 @@ moment_v = tf.Variable( momentum )
 alpha_v  = tf.Variable( alpha )
 
 # prop up the update rule (or "optimizer" in TF lingo)
-if opt_type is "nag":
+if opt_type == "nag":
     optimizer = tf.compat.v1.train.MomentumOptimizer(learning_rate=alpha_v,momentum=moment_v,use_nesterov=True)
-elif opt_type is "momentum":
+elif opt_type == "momentum":
     optimizer = tf.compat.v1.train.MomentumOptimizer(learning_rate=alpha_v,momentum=moment_v,use_nesterov=False)
-elif opt_type is "adam":
+elif opt_type == "adam":
     optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=alpha_v)
-elif opt_type is "rmsprop":
+elif opt_type == "rmsprop":
     optimizer = tf.compat.v1.train.RMSPropOptimizer(learning_rate=alpha_v)
 else:
     optimizer = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=alpha_v)
