@@ -1,2 +1,5 @@
 # cache files
 *.pyc
+.pip_cache/
+*.out
+ContPTNCN/outputs/*
