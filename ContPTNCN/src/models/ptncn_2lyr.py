@@ -125,6 +125,13 @@ class PTNCN:
         elif out_fun == "sigmoid":
             self.out_fx = tf.nn.sigmoid
 
+        # fast weights parameters
+        self.fwt_S = 2  # S value for fast weights
+        self.fwt_eta = 0.01
+        self.fwt_lambda = 0.9
+        self.A1 = None
+        self.A2 = None
+
     def act_dx(self, h, z):
         """
             Hasty derivative function handler
@@ -219,7 +226,20 @@ class PTNCN:
         #self.z2 = tf.add(tf.matmul(self.zf1_tm1, self.M2), tf.matmul(self.zf2_tm1, self.V2))
         if self.standardize is True:
             self.z2 = standardize( self.z2 )
-        self.zf2 = self.act_fx(self.z2)
+        
+        # Add fast weights for layer 2
+        self.zf2 = self.act_fx(self.z2) # h_0(t+1)
+
+        if self.A2 is None:
+            self.A2 = tf.zeros([self.hid_dim, self.hid_dim])
+
+        self.A2 = self.fwt_lambda * self.A2 + self.fwt_eta * tf.matmul(
+                                                            tf.transpose(self.zf2), self.zf2,)
+        
+        # loop over S steps for fast weights
+        for s in range(self.fwt_S):
+            self.zf2 = self.act_fx(self.z2) + tf.matmul(self.zf2, self.A2)
+
         z1_mu = tf.matmul(self.zf2, self.W2)
 
         if self.zeta > 0.0:
@@ -229,6 +249,18 @@ class PTNCN:
         if self.standardize is True:
             self.z1 = standardize( self.z1 )
         self.zf1 = self.act_fx(self.z1)
+
+        # Add fast weights for layer 1
+        if self.A1 is None:
+            self.A1 = tf.zeros([self.hid_dim, self.hid_dim])
+        
+        self.A1 = self.fwt_lambda * self.A1 + self.fwt_eta * tf.matmul(
+                                                            tf.transpose(self.zf1), self.zf1)
+        
+        # loop over S steps for fast weights
+        for s in range(self.fwt_S):
+            self.zf1 = self.act_fx(self.z1) + tf.matmul(self.zf1, self.A1)
+
         x_logits = tf.matmul(self.zf1, self.W1)
         x_mu = self.out_fx( x_logits ) #tf.nn.sigmoid( x_logits )
 
