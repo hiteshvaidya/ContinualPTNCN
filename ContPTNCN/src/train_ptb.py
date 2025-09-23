@@ -141,7 +141,8 @@ def main():
     print(f"Loading data from {data_dir}")
     
     try:
-        data_loader = PTBDataLoader(data_dir, batch_size=20, seq_len=35)
+        data_loader = PTBDataLoader(data_dir, batch_size=20, 
+                                    seq_len=35, padding=50)
     except FileNotFoundError as e:
         print(f"Error loading data: {e}")
         print("Make sure the PTB data files exist in ../data/ptb_char/")
@@ -195,6 +196,9 @@ def main():
         
         # Training loop
         for x_batch, y_batch in data_loader.get_train_batches():
+            print(f"X: {x_batch[0]}")
+            print(f"Y: {y_batch[0]}")
+            exit(0)
             # Training step
             params, loss = train_step(params, x_batch, y_batch, learning_rate)
             

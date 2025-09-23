@@ -6,10 +6,12 @@ import os
 class PTBDataLoader:
     """Penn Treebank character-level data loader for JAX RNN"""
     
-    def __init__(self, data_dir: str, batch_size: int = 32, seq_len: int = 35):
+    def __init__(self, data_dir: str, batch_size: int = 32, 
+                 seq_len: int = 35, padding: int=50):
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.data_dir = data_dir
+        self.padding = padding
         
         # Load vocabulary and create mappings
         self.vocab_file = os.path.join(data_dir, 'vocab.txt')
@@ -59,7 +61,9 @@ class PTBDataLoader:
         return np.array(encoded, dtype=np.int32)
     
     def _create_batches(self, data: np.ndarray) -> Iterator[Tuple[jnp.ndarray, jnp.ndarray]]:
-        """Create batches of sequences for training"""
+        """Create batches of sequences for training on copy task
+        ex, x: [1,2,3,<pad>,<pad>,<pad>]
+            y: [<pad>,<pad>,<pad>,1,2,3]"""
         # Calculate number of batches
         total_len = len(data)
         batch_len = total_len // self.batch_size
@@ -70,16 +74,23 @@ class PTBDataLoader:
         
         # Create sequences
         num_batches = (batch_len - 1) // self.seq_len
+        # [<pad>...] of size [batch_size, seq_len]
+        batchPadding = jnp.full((self.batch_size, self.seq_len), self.padding)
+        print(f"data: {data}")
         
         for i in range(0, num_batches * self.seq_len, self.seq_len):
-            # Input sequences (character indices)
-            x = data[:, i:i + self.seq_len]
-            # Target sequences (shifted by 1 for next character prediction)
-            y = data[:, i + 1:i + self.seq_len + 1]
-            
-            # Keep as indices for embedding layer
-            x_indices = jnp.array(x)  # (batch_size, seq_len)
-            y_indices = jnp.array(y)  # (batch_size, seq_len)
+            # Input sequences [character indices, <padding> * seq_len]
+            # (batch_size, 2*seq_len)
+            x_indices = jnp.concatenate(
+                                [jnp.array(data[:, i:i + self.seq_len]), 
+                                batchPadding], 
+                                axis=1)
+            # Target sequences (shifted by seq_len for copy task prediction)
+            # (batch_size, 2*seq_len)
+            y_indices = jnp.concatenate(
+                                [batchPadding, 
+                                data[:, i + 1:i + self.seq_len + 1]], 
+                                axis=1)
             
             yield x_indices, y_indices
     
@@ -98,3 +109,22 @@ class PTBDataLoader:
     def decode_sequence(self, indices: np.ndarray) -> str:
         """Decode integer sequence back to text"""
         return ''.join([self.idx_to_char[idx] for idx in indices if idx in self.idx_to_char])
+
+
+if __name__ == '__main__':
+    # Data loading
+    data_dir = "../../data/ptb_char"
+    print(f"Loading data from {data_dir}")
+    
+    try:
+        data_loader = PTBDataLoader(data_dir, batch_size=20, seq_len=35)
+    except FileNotFoundError as e:
+        print(f"Error loading data: {e}")
+        print("Make sure the PTB data files exist in ../data/ptb_char/")
+        exit(1)
+    
+    print(f"data: {data_loader.train_data[:10]}")
+    for x_indices, y_indices in data_loader.get_train_batches():
+        print(f"x_indices: {x_indices}")
+        print(f"y_indices: {y_indices}")
+        exit(0)

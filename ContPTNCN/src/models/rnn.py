@@ -15,6 +15,7 @@ class RNNCell:
         self.hidden_size = hidden_size
         self.input_size = input_size
         self.activation = self._get_activation(activation)
+        self.A = jnp.zeros(self.hidden_size)
 
     def _get_activation(self, activation: str) -> Callable:
         """Get activation function"""
