@@ -145,8 +145,8 @@ def main():
     # Model configuration
     vocab_size = data_loader.vocab_size
     hidden_size = 256
-    num_layers = 2
-    cell_type = 'lstm'  # Use LSTM for better performance on long sequences
+    num_layers = 1
+    cell_type = 'rnn'  # Use LSTM for better performance on long sequences
     
     print(f"Creating {cell_type.upper()} model:")
     print(f"  Vocab size: {vocab_size}")
@@ -171,7 +171,7 @@ def main():
     
     # Training configuration
     num_epochs = 10
-    learning_rate = 0.002
+    learning_rate = 0.008
     eval_every = 500
     
     print(f"\nStarting training for {num_epochs} epochs...")

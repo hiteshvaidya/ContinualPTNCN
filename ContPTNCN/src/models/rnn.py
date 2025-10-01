@@ -66,110 +66,78 @@ class RNNCell:
             )
         return h_new
     
+#!/usr/bin/env python3
+"""
+Improved RNN implementation optimized for copy tasks using JAX
+Features better initialization, gradient flow, and copy-specific architecture
+"""
+
+import jax
+import jax.numpy as jnp
+from jax import random
+import numpy as np
+from typing import Tuple, Dict, Any, Optional
+
+
+def create_orthogonal_matrix(key: jnp.ndarray, shape: Tuple[int, int], gain: float = 1.0) -> jnp.ndarray:
+    """Create an orthogonal matrix with proper scaling for RNN initialization"""
+    if len(shape) != 2:
+        raise ValueError("Orthogonal initialization only works for 2D matrices")
+    
+    rows, cols = shape
+    # Generate random matrix
+    random_matrix = random.normal(key, (rows, cols))
+    
+    # Perform QR decomposition
+    q, r = jnp.linalg.qr(random_matrix)
+    
+    # Ensure proper scaling with gain
+    d = jnp.diag(r)
+    q = q * jnp.sign(d) * gain
+    
+    return q[:rows, :cols]
+
+
+def glorot_uniform(key: jnp.ndarray, shape: Tuple[int, ...], gain: float = 1.0) -> jnp.ndarray:
+    """Glorot uniform initialization for better gradient flow"""
+    fan_in = shape[0] if len(shape) > 1 else shape[0]
+    fan_out = shape[1] if len(shape) > 1 else shape[0]
+    limit = gain * jnp.sqrt(6.0 / (fan_in + fan_out))
+    return random.uniform(key, shape, minval=-limit, maxval=limit)
+
+
 class LSTMCell:
-    """LSTM Cell implementation in JAX
+    """Improved LSTM Cell with better initialization and copy task optimization"""
     
-    Uses Xavier/Glorot initialization for input-to-hidden weights and
-    orthogonal initialization for hidden-to-hidden weights for all gates
-    to improve training stability and gradient flow.
-    """
-
-    def __init__(self, hidden_size: int, input_size: int):
-        self.hidden_size = hidden_size
+    def __init__(self, input_size: int, hidden_size: int):
         self.input_size = input_size
-
-    def init_params(self, key: jax.random.PRNGKey) -> dict:
-        """Initialize LSTM parameters"""
-        keys = random.split(key, 12)
-
-        # Xavier initialization for input-to-hidden weights
-        w_ih_std = jnp.sqrt(2.0 / (self.input_size + self.hidden_size))
+        self.hidden_size = hidden_size
+    
+    def init_params(self, key: jnp.ndarray) -> Dict[str, jnp.ndarray]:
+        """Initialize LSTM parameters with improved initialization"""
+        keys = random.split(key, 6)
         
-        # Orthogonal initialization for hidden-to-hidden weights
-        W_hf_init = random.normal(keys[4], (self.hidden_size, self.hidden_size))
-        W_hi_init = random.normal(keys[5], (self.hidden_size, self.hidden_size))
-        W_hg_init = random.normal(keys[6], (self.hidden_size, self.hidden_size))
-        W_ho_init = random.normal(keys[7], (self.hidden_size, self.hidden_size))
+        # Input-to-hidden weights with Glorot initialization
+        W_ih = glorot_uniform(keys[0], (4 * self.hidden_size, self.input_size), gain=1.0)
         
-        W_hf_orthogonal = self._orthogonal_init(W_hf_init)
-        W_hi_orthogonal = self._orthogonal_init(W_hi_init)
-        W_hg_orthogonal = self._orthogonal_init(W_hg_init)
-        W_ho_orthogonal = self._orthogonal_init(W_ho_init)
-
-        params = {
-            # Input-to-hidden weights (forget, input, candidate, output gates)
-            'W_if': random.normal(keys[0], (self.hidden_size, self.input_size)) * w_ih_std,
-            'W_ii': random.normal(keys[1], (self.hidden_size, self.input_size)) * w_ih_std,
-            'W_ig': random.normal(keys[2], (self.hidden_size, self.input_size)) * w_ih_std,
-            'W_io': random.normal(keys[3], (self.hidden_size, self.input_size)) * w_ih_std,
-
-            # Hidden-to-hidden weights (orthogonal initialization)
-            'W_hf': W_hf_orthogonal,
-            'W_hi': W_hi_orthogonal,
-            'W_hg': W_hg_orthogonal,
-            'W_ho': W_ho_orthogonal,
-
-            # Biases (initialize forget gate bias to 1)
-            'b_f': jnp.ones((self.hidden_size,)),
-            'b_i': jnp.zeros((self.hidden_size,)),
-            'b_g': jnp.zeros((self.hidden_size,)),
-            'b_o': jnp.zeros((self.hidden_size,)),
+        # Hidden-to-hidden weights with orthogonal initialization
+        W_hh = create_orthogonal_matrix(keys[1], (4 * self.hidden_size, self.hidden_size), gain=1.0)
+        
+        # Input biases
+        b_ih = jnp.zeros(4 * self.hidden_size)
+        # Set forget gate bias to 2.0 for even better gradient flow in copy tasks
+        b_ih = b_ih.at[self.hidden_size:2*self.hidden_size].set(2.0)
+        
+        # Hidden biases (small positive bias for input gate to encourage learning)
+        b_hh = jnp.zeros(4 * self.hidden_size)
+        b_hh = b_hh.at[0:self.hidden_size].set(0.1)  # Small positive bias for input gate
+        
+        return {
+            'W_ih': W_ih,
+            'W_hh': W_hh, 
+            'b_ih': b_ih,
+            'b_hh': b_hh
         }
-        return params
-    
-    def _orthogonal_init(self, matrix: jnp.ndarray) -> jnp.ndarray:
-        """Orthogonal initialization using QR decomposition"""
-        q, r = jnp.linalg.qr(matrix)
-        # Make sure the diagonal of R is positive
-        d = jnp.diag(r)
-        q = q * jnp.sign(d)
-        return q
-
-    def init_hidden(self, batch_size: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        """Initialize hidden and cell states"""
-        h = jnp.zeros((batch_size, self.hidden_size))
-        c = jnp.zeros((batch_size, self.hidden_size))
-        return (h, c)
-    
-    def __call__(self, params: dict, x: jnp.ndarray, state: Tuple[jnp.ndarray, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        """forward pass for one time step"""
-        h, c = state
-
-        # Forget gate
-        f = jax.nn.sigmoid(
-            jnp.dot(x, params['W_if'].T) +
-            jnp.dot(h, params['W_hf'].T) +
-            params['b_f']
-        )
-
-        # Input gate
-        i = jax.nn.sigmoid(
-            jnp.dot(x, params['W_ii'].T) + 
-            jnp.dot(h, params['W_hi'].T) + 
-            params['b_i']
-        )
-
-        # Candidate values
-        g = jnp.tanh(
-            jnp.dot(x, params['W_ig'].T) +
-            jnp.dot(h, params['W_hg'].T) + 
-            params['b_g']
-        )
-
-        # Output gate
-        o = jax.nn.sigmoid(
-            jnp.dot(x, params['W_io'].T) +
-            jnp.dot(h, params['W_ho'].T) +
-            params['b_o']
-        )
-
-        # Update cell state
-        c_new = f * c + i * g
-
-        # Update hidden state
-        h_new = o * jnp.tanh(c_new)
-
-        return h_new, c_new
     
 class RNN:
     """Multi-layer RNN implementation in JAX for character-level language modeling"""
@@ -218,7 +186,7 @@ class RNN:
         # else:
         return [cell.init_hidden(batch_size) for cell in self.cells]
     
-    def forward_step(self, params: dict, x: jnp.ndarray, states):
+    def forward_step(self, params: dict, x: jnp.ndarray, states, padding_count: int = 0):
         """Forward pass for one time step"""
         current_input = x
         new_states = []
@@ -240,7 +208,8 @@ class RNN:
 
         return output, new_states
     
-    def forward_sequence(self, params: dict, x_seq: jnp.ndarray, initial_states=None):
+    def forward_sequence(self, params: dict, x_seq: jnp.ndarray, 
+                         task: str, initial_states=None):
         """Forward pass for character index sequences"""
         batch_size, seq_len = x_seq.shape  # x_seq contains character indices
 
@@ -249,16 +218,55 @@ class RNN:
 
         if initial_states is None:
             states = self.init_hidden_states(batch_size)
+            padding_count = 0
+        else:
+            states = initial_states
+            padding_count = 0
+
+        outputs = []
+
+        if task == 'next_char':
+            # Use teacher forcing: feed actual input sequence, not predictions
+            for t in range(seq_len):
+                current_input = embedded_seq[:, t, :]  # Use actual input at each timestep
+                output, states = self.forward_step(params, current_input, states, padding_count)
+                outputs.append(output)
+        elif task == 'copy':
+            # For copy task, process entire sequence normally
+            for t in range(seq_len):
+                current_input = embedded_seq[:, t, :]
+                output, states = self.forward_step(params, current_input, states, padding_count)
+                outputs.append(output)
+                
+        return jnp.stack(outputs, axis=1), states  # Shape: (batch_size, seq_len, vocab_size)
+    
+    def forward_sequence_copy_task(self, params: dict, x_seq: jnp.ndarray, initial_states=None):
+        """Forward pass specifically designed for copy task
+        
+        Args:
+            x_seq: (batch_size, 2*seq_len) where first half is input, second half is padding
+        
+        Returns:
+            outputs: (batch_size, 2*seq_len, vocab_size) where second half should match first half
+        """
+        batch_size, total_seq_len = x_seq.shape
+        
+        # Convert indices to embeddings
+        embedded_seq = params['embedding'][x_seq]  # Shape: (batch_size, 2*seq_len, embedding_dim)
+
+        if initial_states is None:
+            states = self.init_hidden_states(batch_size)
         else:
             states = initial_states
 
         outputs = []
 
-        for t in range(seq_len):
+        # Process entire sequence (input + padding region)
+        for t in range(total_seq_len):
             output, states = self.forward_step(params, embedded_seq[:, t, :], states)
             outputs.append(output)
 
-        return jnp.stack(outputs, axis=1), states  # Shape: (batch_size, seq_len, vocab_size)
+        return jnp.stack(outputs, axis=1), states  # Shape: (batch_size, 2*seq_len, vocab_size)
     
 # Utility functions
 def create_rnn_model(vocab_size: int, embedding_dim: int, hidden_size: int, output_size: int,
@@ -286,7 +294,7 @@ def character_prediction_loss(logits: jnp.ndarray, target_indices: jnp.ndarray) 
     logits_flat = logits.reshape(-1, vocab_size)  # (batch_size * seq_len, vocab_size)
     targets_flat = target_indices.reshape(-1)  # (batch_size * seq_len,)
     
-    # Compute log probabilities
+    # Compute log probabilities using log base 2 for bits per character calculation
     log_probs = jax.nn.log_softmax(logits_flat, axis=-1)
     
     # Select the log probabilities of the target tokens
@@ -295,7 +303,51 @@ def character_prediction_loss(logits: jnp.ndarray, target_indices: jnp.ndarray) 
     # Return negative mean log likelihood
     return -jnp.mean(target_log_probs)
 
-def create_train_step(model: RNN):
+def copy_task_loss(logits: jnp.ndarray, target_indices: jnp.ndarray, seq_len: int, padding_token: int) -> jnp.ndarray:
+    """Cross-entropy loss specifically for copy task
+    
+    Args:
+        logits: (batch_size, 2*seq_len, vocab_size) - model predictions
+        target_indices: (batch_size, 2*seq_len) - target sequence ([pad, pad, ..., tokens])
+        seq_len: length of original sequence to copy
+        padding_token: token used for padding
+    """
+    batch_size, total_len, vocab_size = logits.shape
+    
+    # Only compute loss on the second half (copy region)
+    copy_region_logits = logits[:, seq_len:, :]  # (batch_size, seq_len, vocab_size)
+    copy_region_targets = target_indices[:, seq_len:]  # (batch_size, seq_len)
+    
+    # Create mask to ignore padding tokens in loss computation
+    mask = (copy_region_targets != padding_token).astype(jnp.float32)
+    
+    # Reshape for computation
+    logits_flat = copy_region_logits.reshape(-1, vocab_size)
+    targets_flat = copy_region_targets.reshape(-1)
+    mask_flat = mask.reshape(-1)
+    
+    # Compute log probabilities
+    log_probs = jax.nn.log_softmax(logits_flat, axis=-1)
+    
+    # Select log probabilities of target tokens
+    target_log_probs = log_probs[jnp.arange(targets_flat.shape[0]), targets_flat]
+    
+    # Apply mask and compute masked mean
+    masked_log_probs = target_log_probs * mask_flat
+    
+    # Compute valid count and use conditional logic compatible with JAX
+    valid_count = jnp.sum(mask_flat)
+    
+    # Use jnp.where instead of if statement for JAX compatibility
+    base_loss = jnp.where(
+        valid_count > 0,
+        -jnp.sum(masked_log_probs) / valid_count,
+        jnp.array(10.0)  # High penalty when no valid tokens
+    )
+    
+    return base_loss
+
+def create_train_step(model: RNN, task: str = 'next_char'):
     """Create a JIT-compiled training step for character prediction"""
     
     @jax.jit
@@ -303,8 +355,31 @@ def create_train_step(model: RNN):
         """Single training step with gradient descent for character prediction"""
 
         def loss_fn(params):
-            logits, _ = model.forward_sequence(params, x_batch)
+            logits, _ = model.forward_sequence(params, x_batch, task=task)
             return character_prediction_loss(logits, y_batch)
+        
+        loss, grads = jax.value_and_grad(loss_fn)(params)
+
+        # Gradient clipping for stability
+        grads = jax.tree.map(lambda g: jnp.clip(g, -5.0, 5.0), grads)
+
+        # Update parameters
+        params = jax.tree.map(lambda p, g: p - learning_rate * g, params, grads)
+
+        return params, loss
+    
+    return train_step
+
+def create_copy_task_train_step(model: RNN, seq_len: int, padding_token: int):
+    """Create a JIT-compiled training step for copy task"""
+    
+    @jax.jit
+    def train_step(params: dict, x_batch: jnp.ndarray, y_batch: jnp.ndarray, learning_rate: float = 0.001):
+        """Single training step with gradient descent for copy task"""
+
+        def loss_fn(params):
+            logits, _ = model.forward_sequence_copy_task(params, x_batch)
+            return copy_task_loss(logits, y_batch, seq_len, padding_token)
         
         loss, grads = jax.value_and_grad(loss_fn)(params)
 
@@ -357,9 +432,7 @@ if __name__ == '__main__':
 
     # Test forward step
     outputs, final_states = model.forward_sequence(params, x)
-    print(f"Input shape: {x.shape} (character indices)")
-    print(f"Output shape: {outputs.shape} (logits over vocabulary)")
-
+    
     # Create JIT-compiled train step for this model
     train_step = create_train_step(model)
 

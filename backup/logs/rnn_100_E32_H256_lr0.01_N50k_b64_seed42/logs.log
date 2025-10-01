@@ -1,0 +1,22 @@
+2025-09-24 12:18:31 | INFO | Using device: cuda
+2025-09-24 12:18:34 | INFO | Loaded train data with shape: (10000, 103), (10000, 103)
+2025-09-24 12:18:34 | INFO | Loaded test data with shape: (1000, 103), (1000, 103)
+2025-09-24 12:18:41 | INFO | Vocabulary: ['a', 'x', 'c', 'r', 'y', 'w', 'b', 't', 'o', '$', ' ']
+2025-09-24 12:18:41 | INFO | Unknown:  , Delimiter: $
+2025-09-24 12:18:41 | INFO | sequence length: 50, padding: 3, output length: 50
+2025-09-24 12:18:41 | INFO | batch size: 64, input size: 11, embedding size: 16, hidden size: 256
+2025-09-24 12:18:41 | INFO | epochs: 10, lr: 0.005
+2025-09-24 12:18:41 | INFO | train samples: 10000, test samples: 1000
+2025-09-24 12:18:53 | INFO | Epoch 0 | Loss torch: 1.0992, Train Accuracy: 0.5623
+2025-09-24 12:19:04 | INFO | Epoch 1 | Loss torch: 1.0700, Train Accuracy: 0.5685
+2025-09-24 12:19:16 | INFO | Epoch 2 | Loss torch: 1.0703, Train Accuracy: 0.5684
+2025-09-24 12:19:27 | INFO | Epoch 3 | Loss torch: 1.0702, Train Accuracy: 0.5683
+2025-09-24 12:19:39 | INFO | Epoch 4 | Loss torch: 1.0705, Train Accuracy: 0.5689
+2025-09-24 12:19:51 | INFO | Epoch 5 | Loss torch: 1.0699, Train Accuracy: 0.5683
+2025-09-24 12:20:02 | INFO | Epoch 6 | Loss torch: 1.0703, Train Accuracy: 0.5685
+2025-09-24 12:20:14 | INFO | Epoch 7 | Loss torch: 1.0696, Train Accuracy: 0.5687
+2025-09-24 12:20:25 | INFO | Epoch 8 | Loss torch: 1.0699, Train Accuracy: 0.5685
+2025-09-24 12:20:37 | INFO | Epoch 9 | Loss torch: 1.0700, Train Accuracy: 0.5686
+2025-09-24 12:20:37 | INFO | train time: 116.39261984825134
+2025-09-24 12:20:37 | INFO | Test Loss: 0.0000, Test Accuracy: 0.0000
+2025-09-24 12:20:37 | INFO | test time: 0.0018782615661621094
