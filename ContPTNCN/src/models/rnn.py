@@ -15,7 +15,13 @@ class RNNCell:
         self.hidden_size = hidden_size
         self.input_size = input_size
         self.activation = self._get_activation(activation)
-        self.A = jnp.zeros(self.hidden_size)
+        self.lr_lambda = 0.9
+        self.lr_eta = 0.1
+        self.t = 0
+        self.hidden_states = []
+
+    def _increment_time(self):
+        self.t += 1
 
     def _get_activation(self, activation: str) -> Callable:
         """Get activation function"""
@@ -36,12 +42,13 @@ class RNNCell:
         
         # Orthogonal initialization for hidden-to-hidden weights
         W_hh_init = random.normal(k2, (self.hidden_size, self.hidden_size))
-        W_hh_orthogonal = self._orthogonal_init(W_hh_init)
+        # W_hh_orthogonal = self._orthogonal_init(W_hh_init)
 
         params = {
             'W_ih': random.normal(k1, (self.hidden_size, self.input_size)) * w_ih_std,
-            'W_hh': W_hh_orthogonal,
-            'b_h': jnp.zeros((self.hidden_size))
+            'W_hh': W_hh_init,
+            'b_h': jnp.zeros((self.hidden_size)),
+            # 'hidden_states': [],
         }
         return params
     
@@ -57,14 +64,43 @@ class RNNCell:
         """Initialize hidden state"""
         return jnp.zeros((batch_size, self.hidden_size))
     
-    def __call__(self, params: dict, x: jnp.ndarray, h: jnp.ndarray) -> jnp.ndarray:
-        """forward pass for one time step"""
-        h_new = self.activation(
-            jnp.dot(x, params['W_ih'].T) +
-            jnp.dot(h, params['W_hh'].T) +
-            params['b_h']
+    def fast_forward(self, params: dict, x: jnp.ndarray, h: jnp.ndarray) -> jnp.ndarray:
+        """Fast forward pass for multiple time steps"""
+
+        h_next = self.activation(
+                jnp.dot(x, params['W_ih'].T) +
+                jnp.dot(h, params['W_hh'].T) +
+                params['b_h']
             )
-        return h_new
+        # h_s_next = h_next.copy()
+        # h_fast = jnp.zeros_like(h_next)
+        
+        # for s in range(2):
+        #     for tau in range(0, self.t):
+        #         temp = jnp.dot(jnp.transpose(self.hidden_states[tau]), 
+        #                     h_s_next)
+        #         h_fast += self.lr_lambda**(self.t - tau) * jnp.dot(
+        #                         self.hidden_states[tau], 
+        #                         temp)
+        #     h_fast = self.lr_eta * h_fast
+            
+        #     h_s_next = h_next + h_fast
+
+        # params['hidden_states'].append(h_s_next)
+        return h_next
+
+    def __call__(self, params: dict, x: jnp.ndarray, 
+                 h: jnp.ndarray, fast=False) -> jnp.ndarray:
+        """forward pass for one time step"""
+        if fast:
+            return self.fast_forward(params, x, h)
+        else:
+            h_new = self.activation(
+                jnp.dot(x, params['W_ih'].T) +
+                jnp.dot(h, params['W_hh'].T) +
+                params['b_h']
+                )
+            return h_new
     
 #!/usr/bin/env python3
 """
@@ -139,6 +175,35 @@ class LSTMCell:
             'b_hh': b_hh
         }
     
+    def init_hidden(self, batch_size: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """Initialize hidden and cell states for LSTM"""
+        h = jnp.zeros((batch_size, self.hidden_size))
+        c = jnp.zeros((batch_size, self.hidden_size))
+        return (h, c)
+    
+    def __call__(self, params: dict, x: jnp.ndarray, state: Tuple[jnp.ndarray, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """Forward pass for LSTM cell"""
+        h, c = state
+        
+        # Compute all gates at once
+        gates_ih = jnp.dot(x, params['W_ih'].T) + params['b_ih']
+        gates_hh = jnp.dot(h, params['W_hh'].T) + params['b_hh']
+        gates = gates_ih + gates_hh
+        
+        # Split into individual gates
+        i_gate = jax.nn.sigmoid(gates[:, :self.hidden_size])                    # Input gate
+        f_gate = jax.nn.sigmoid(gates[:, self.hidden_size:2*self.hidden_size])  # Forget gate
+        g_gate = jnp.tanh(gates[:, 2*self.hidden_size:3*self.hidden_size])      # New gate
+        o_gate = jax.nn.sigmoid(gates[:, 3*self.hidden_size:])                  # Output gate
+        
+        # Update cell state
+        c_new = f_gate * c + i_gate * g_gate
+        
+        # Update hidden state
+        h_new = o_gate * jnp.tanh(c_new)
+        
+        return h_new, (h_new, c_new)
+    
 class RNN:
     """Multi-layer RNN implementation in JAX for character-level language modeling"""
 
@@ -153,7 +218,7 @@ class RNN:
 
         # Initialize cells - first layer takes embedded input, others take hidden states
         if cell_type == 'lstm':
-            self.cells = [LSTMCell(hidden_size, embedding_dim if i == 0 else hidden_size) for i in range(num_layers)]
+            self.cells = [LSTMCell(embedding_dim if i == 0 else hidden_size, hidden_size) for i in range(num_layers)]
         else:
             self.cells = [RNNCell(hidden_size, embedding_dim if i == 0 else hidden_size, activation) for i in range(num_layers)]
 
@@ -184,32 +249,37 @@ class RNN:
         # if self.cell_type == 'lstm':
         #     return [cell.init_hidden(batch_size) for cell in self.cells]
         # else:
-        return [cell.init_hidden(batch_size) for cell in self.cells]
+        return tuple(cell.init_hidden(batch_size) for cell in self.cells)
     
-    def forward_step(self, params: dict, x: jnp.ndarray, states, padding_count: int = 0):
+    def forward_step(self, params: dict, x: jnp.ndarray, 
+                     states,
+                     fast: bool=False, t: int = None):
         """Forward pass for one time step"""
         current_input = x
         new_states = []
 
-        for i, cell in enumerate(self.cells):
+        # Process each layer sequentially
+        for i in range(len(self.cells)):
+            cell = self.cells[i]
+            state = states[i]
             layer_params = params[f'layer_{i}']
 
             if self.cell_type == 'lstm':
-                h_new, c_new = cell(layer_params, current_input, states[i])
-                new_states.append((h_new, c_new))
+                h_new, state_new = cell(layer_params, current_input, state)
+                new_states.append(state_new)
                 current_input = h_new
             else:
-                h_new = cell(layer_params, current_input, states[i])
+                h_new = cell(layer_params, current_input, state, fast)
                 new_states.append(h_new)
                 current_input = h_new
 
         # Output layer
         output = jnp.dot(current_input, params['W_out'].T) + params['b_out']
 
-        return output, new_states
+        return output, tuple(new_states)
     
     def forward_sequence(self, params: dict, x_seq: jnp.ndarray, 
-                         task: str, initial_states=None):
+                         task: str, initial_states=None, fast=False):
         """Forward pass for character index sequences"""
         batch_size, seq_len = x_seq.shape  # x_seq contains character indices
 
@@ -218,26 +288,17 @@ class RNN:
 
         if initial_states is None:
             states = self.init_hidden_states(batch_size)
-            padding_count = 0
         else:
             states = initial_states
-            padding_count = 0
 
         outputs = []
 
-        if task == 'next_char':
-            # Use teacher forcing: feed actual input sequence, not predictions
-            for t in range(seq_len):
-                current_input = embedded_seq[:, t, :]  # Use actual input at each timestep
-                output, states = self.forward_step(params, current_input, states, padding_count)
-                outputs.append(output)
-        elif task == 'copy':
-            # For copy task, process entire sequence normally
-            for t in range(seq_len):
-                current_input = embedded_seq[:, t, :]
-                output, states = self.forward_step(params, current_input, states, padding_count)
-                outputs.append(output)
-                
+        # Process sequence timestep by timestep
+        for t in range(seq_len):
+            current_input = embedded_seq[:, t, :]  # Shape: (batch_size, embedding_dim)
+            output, states = self.forward_step(params, current_input, states, fast)
+            outputs.append(output)
+        
         return jnp.stack(outputs, axis=1), states  # Shape: (batch_size, seq_len, vocab_size)
     
     def forward_sequence_copy_task(self, params: dict, x_seq: jnp.ndarray, initial_states=None):

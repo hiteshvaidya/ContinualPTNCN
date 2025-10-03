@@ -38,12 +38,13 @@ def create_train_step_ptb(model: RNN):
     """Create a JIT-compiled training step for PTB language modeling"""
     
     def train_step(params: dict, x_batch: jnp.ndarray, y_batch: jnp.ndarray,
-                   learning_rate: float = 0.001, task: str = None):
+                   learning_rate: float = 0.001, task: str = None, 
+                   fast: bool = False):
         """Single training step with gradient descent"""
 
         def loss_fn(params):
             # Forward pass through the model
-            logits, _ = model.forward_sequence(params, x_batch, task)
+            logits, _ = model.forward_sequence(params, x_batch, task, fast=fast)
             return cross_entropy_loss(logits, y_batch, task)
         
         loss, grads = jax.value_and_grad(loss_fn)(params)
@@ -55,7 +56,8 @@ def create_train_step_ptb(model: RNN):
         return params, loss
     
     # Apply jit compilation with static_argnums after function definition
-    return jax.jit(train_step, static_argnums=(4,))
+    # return jax.jit(train_step, static_argnums=(4,))
+    return train_step
 
 def evaluate_model(model: RNN, params: dict, data_loader: PTBDataLoader, dataset: str = 'valid', task: str = 'next_char'):
     """Evaluate model on validation or test set for copy task"""
@@ -242,9 +244,10 @@ def main():
     vocab_size = data_loader.vocab_size
     embedding_dim = 128  # Embedding dimension for character indices
     hidden_size = 256
-    num_layers = 1
+    num_layers = 2
     cell_type = 'rnn'  # Use LSTM for better performance on long sequences
     task = 'next_char'
+    fast_choice = True
     
     print(f"Creating {cell_type.upper()} model:")
     print(f"  Vocab size: {vocab_size}")
@@ -264,14 +267,14 @@ def main():
     
     # Initialize parameters
     params = model.init_params(key)
-    print(f"Model initialized with {sum(p.size for p in jax.tree_util.tree_leaves(params))} parameters")
+    # print(f"Model initialized with {sum(p.size for p in jax.tree_util.tree_leaves(params))} parameters")
     
     # Create training function
     train_step = create_train_step_ptb(model)
     # train_step = create_copy_task_train_step(model, data_loader.seq_len, data_loader.padding)
     
     # Training configuration
-    num_epochs = 10
+    num_epochs = 25
     learning_rate = 0.01  # Higher learning rate for copy task
     eval_every = 200  # More frequent evaluation to track progress
     
@@ -290,7 +293,7 @@ def main():
         for x_batch, y_batch in data_loader.get_train_batches(task):
             # Training step
             params, loss = train_step(params, x_batch, y_batch, 
-                                      learning_rate, task)
+                                      learning_rate, task, fast=fast_choice)
             
             epoch_loss += loss
             num_batches += 1
