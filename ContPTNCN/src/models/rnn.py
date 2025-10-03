@@ -60,34 +60,38 @@ class RNNCell:
         q = q * jnp.sign(d)
         return q
     
-    def init_hidden(self, batch_size: int) -> jnp.ndarray:
+    def init_hidden(self, batch_size: int, seq_len: int) -> jnp.ndarray:
         """Initialize hidden state"""
-        return jnp.zeros((batch_size, self.hidden_size))
-    
+        return jnp.zeros((batch_size, seq_len, self.hidden_size))
+
     def fast_forward(self, params: dict, x: jnp.ndarray, h: jnp.ndarray) -> jnp.ndarray:
         """Fast forward pass for multiple time steps"""
-
+        # h0(t+1) -> standard RNN update
         h_next = self.activation(
                 jnp.dot(x, params['W_ih'].T) +
-                jnp.dot(h, params['W_hh'].T) +
-                params['b_h']
+                jnp.dot(h[:,self.t,:], params['W_hh'].T)
             )
-        # h_s_next = h_next.copy()
-        # h_fast = jnp.zeros_like(h_next)
+        h_s_next = h_next.copy()
+        h_fast = jnp.zeros_like(h_next)
         
-        # for s in range(2):
-        #     for tau in range(0, self.t):
-        #         temp = jnp.dot(jnp.transpose(self.hidden_states[tau]), 
-        #                     h_s_next)
-        #         h_fast += self.lr_lambda**(self.t - tau) * jnp.dot(
-        #                         self.hidden_states[tau], 
-        #                         temp)
-        #     h_fast = self.lr_eta * h_fast
+        # h_s(t+1) -> fast weights update
+        for s in range(2):
+            # A(t)h_s(t+1)
+            for tau in range(1, self.t):
+                temp = jnp.dot(jnp.transpose(h[:,tau,:]), 
+                                h_next)
+                h_fast += self.lr_lambda**(self.t - tau) * jnp.dot(
+                                                                h[:,tau,:], 
+                                                                temp
+                                                                )
+            h_fast = self.lr_eta * h_fast
             
-        #     h_s_next = h_next + h_fast
+            # h_s+1(t+1) = f([Wh(t) + Cx(t)]) + A(t)h_s(t+1))
+            h_s_next = h_next + h_fast
 
-        # params['hidden_states'].append(h_s_next)
-        return h_next
+        # h[:,self.t+1,:] = h_s_next
+        h = h.at[:,self.t,:].set(h_s_next)
+        return h_s_next
 
     def __call__(self, params: dict, x: jnp.ndarray, 
                  h: jnp.ndarray, fast=False) -> jnp.ndarray:
@@ -244,12 +248,12 @@ class RNN:
 
         return params
     
-    def init_hidden_states(self, batch_size: int):
+    def init_hidden_states(self, batch_size: int, seq_len: int):
         """Initialize hidden states for all layers"""
         # if self.cell_type == 'lstm':
         #     return [cell.init_hidden(batch_size) for cell in self.cells]
         # else:
-        return tuple(cell.init_hidden(batch_size) for cell in self.cells)
+        return tuple(cell.init_hidden(batch_size, seq_len) for cell in self.cells)
     
     def forward_step(self, params: dict, x: jnp.ndarray, 
                      states,
@@ -270,8 +274,9 @@ class RNN:
                 current_input = h_new
             else:
                 h_new = cell(layer_params, current_input, state, fast)
-                new_states.append(h_new)
+                # new_states.append(h_new)
                 current_input = h_new
+                cell._increment_time()  # Increment time step for fast weights
 
         # Output layer
         output = jnp.dot(current_input, params['W_out'].T) + params['b_out']
@@ -287,17 +292,18 @@ class RNN:
         embedded_seq = params['embedding'][x_seq]  # Shape: (batch_size, seq_len, embedding_dim)
 
         if initial_states is None:
-            states = self.init_hidden_states(batch_size)
+            init_states = self.init_hidden_states(batch_size, seq_len)
         else:
-            states = initial_states
+            init_states = initial_states
 
         outputs = []
 
         # Process sequence timestep by timestep
         for t in range(seq_len):
             current_input = embedded_seq[:, t, :]  # Shape: (batch_size, embedding_dim)
-            output, states = self.forward_step(params, current_input, states, fast)
+            output, states = self.forward_step(params, current_input, init_states, fast)
             outputs.append(output)
+
         
         return jnp.stack(outputs, axis=1), states  # Shape: (batch_size, seq_len, vocab_size)
     
