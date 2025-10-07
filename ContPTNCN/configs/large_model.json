@@ -1,0 +1,15 @@
+{
+  "name": "large_model",
+  "embedding_dim": 128,
+  "hidden_size": 256,
+  "num_layers": 2,
+  "learning_rate": 0.003,
+  "batch_size": 64,
+  "seq_len": 35,
+  "num_epochs": 25,
+  "activation": "tanh",
+  "seed": 42,
+  "max_train_batches": 500,
+  "max_valid_batches": 20,
+  "data_dir": "../data/ptb_char"
+}

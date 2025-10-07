@@ -62,7 +62,7 @@ class RNNCell:
     
     def init_hidden(self, batch_size: int, seq_len: int) -> jnp.ndarray:
         """Initialize hidden state"""
-        return jnp.zeros((batch_size, seq_len, self.hidden_size))
+        return jnp.zeros((batch_size, self.hidden_size)) # seq_len
 
     def fast_forward(self, params: dict, x: jnp.ndarray, h: jnp.ndarray) -> jnp.ndarray:
         """Fast forward pass for multiple time steps"""
@@ -274,7 +274,7 @@ class RNN:
                 current_input = h_new
             else:
                 h_new = cell(layer_params, current_input, state, fast)
-                # new_states.append(h_new)
+                new_states.append(h_new)
                 current_input = h_new
                 cell._increment_time()  # Increment time step for fast weights
 

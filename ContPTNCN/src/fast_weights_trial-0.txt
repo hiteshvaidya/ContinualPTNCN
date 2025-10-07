@@ -1,0 +1,28 @@
+============================================================
+JAX RNN/LSTM Training on Penn Treebank
+============================================================
+Available devices: [CudaDevice(id=0), CudaDevice(id=1), CudaDevice(id=2), CudaDevice(id=3)]
+Using GPU backend
+JAX backend: gpu
+Random seed: 42
+Loading data from ../data/ptb_char
+Loaded PTB dataset:
+  Vocabulary size: 50
+  Train data length: 4975414
+  Valid data length: 389672
+  Test data length: 438662
+ Sequence length: 10, Batch size: 64
+Creating RNN model:
+  Vocab size: 50
+  Embedding dim: 128
+  Hidden size: 256
+  Num layers: 1
+
+Starting training for 25 epochs...
+Learning rate: 0.01
+Epoch 1/25
+task: next_char, total_len: 4975414, batch_len: 77740, num_batches: 7773
+Epoch 1/25: Avg BPC = 5.5934, Time = 3495.93s
+Epoch 2/25
+task: next_char, total_len: 4975414, batch_len: 77740, num_batches: 7773
+task: next_char, total_len: 389672, batch_len: 6088, num_batches: 608

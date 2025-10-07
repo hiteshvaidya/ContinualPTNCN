@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 from jax import random
 import numpy as np
+from tqdm import tqdm
 from models.rnn import create_rnn_model, RNN, create_copy_task_train_step, copy_task_loss
 from utils.ptb_data_loader import PTBDataLoader
 import time
@@ -233,8 +234,8 @@ def main():
     print(f"Loading data from {data_dir}")
     
     try:
-        data_loader = PTBDataLoader(data_dir, batch_size=20, 
-                                    seq_len=35)  # Let it auto-detect padding token
+        data_loader = PTBDataLoader(data_dir, batch_size=64, 
+                                    seq_len=10)  # Let it auto-detect padding token
     except FileNotFoundError as e:
         print(f"Error loading data: {e}")
         print("Make sure the PTB data files exist in ../data/ptb_char/")
@@ -244,10 +245,10 @@ def main():
     vocab_size = data_loader.vocab_size
     embedding_dim = 128  # Embedding dimension for character indices
     hidden_size = 256
-    num_layers = 2
+    num_layers = 1
     cell_type = 'rnn'  # Use LSTM for better performance on long sequences
     task = 'next_char'
-    fast_choice = True
+    fast_choice = False
     
     print(f"Creating {cell_type.upper()} model:")
     print(f"  Vocab size: {vocab_size}")
@@ -289,8 +290,9 @@ def main():
         epoch_loss = 0.0
         num_batches = 0
         
+        tqdm.write(f"Epoch {epoch + 1}/{num_epochs}")
         # Training loop
-        for x_batch, y_batch in data_loader.get_train_batches(task):
+        for x_batch, y_batch in tqdm(data_loader.get_train_batches(task)):
             # Training step
             params, loss = train_step(params, x_batch, y_batch, 
                                       learning_rate, task, fast=fast_choice)

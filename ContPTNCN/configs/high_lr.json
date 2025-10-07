@@ -1,0 +1,15 @@
+{
+  "name": "high_lr",
+  "embedding_dim": 64,
+  "hidden_size": 128,
+  "num_layers": 1,
+  "learning_rate": 0.01,
+  "batch_size": 32,
+  "seq_len": 20,
+  "num_epochs": 20,
+  "activation": "tanh",
+  "seed": 42,
+  "max_train_batches": 500,
+  "max_valid_batches": 20,
+  "data_dir": "../data/ptb_char"
+}
