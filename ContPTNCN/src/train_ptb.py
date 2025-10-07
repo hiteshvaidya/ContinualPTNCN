@@ -248,7 +248,7 @@ def main():
     num_layers = 1
     cell_type = 'rnn'  # Use LSTM for better performance on long sequences
     task = 'next_char'
-    fast_choice = False
+    fast_choice = True
     
     print(f"Creating {cell_type.upper()} model:")
     print(f"  Vocab size: {vocab_size}")
@@ -275,7 +275,7 @@ def main():
     # train_step = create_copy_task_train_step(model, data_loader.seq_len, data_loader.padding)
     
     # Training configuration
-    num_epochs = 25
+    num_epochs = 10
     learning_rate = 0.01  # Higher learning rate for copy task
     eval_every = 200  # More frequent evaluation to track progress
     
@@ -333,7 +333,7 @@ def main():
         
         # Generate sample text
         if (epoch + 1) % 2 == 0:
-            sample_text = generate_text(model, params, data_loader, "TheUniversityofSouthFlorida", length=50, task=task)
+            sample_text = generate_text(model, params, data_loader, "The", length=50, task=task)
             print(f"Sample text: {sample_text}")
     
     # Final evaluation

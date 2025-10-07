@@ -19,6 +19,7 @@ class RNNCell:
         self.lr_eta = 0.1
         self.t = 0
         self.hidden_states = []
+        self.A = None
 
     def _increment_time(self):
         self.t += 1
@@ -62,6 +63,7 @@ class RNNCell:
     
     def init_hidden(self, batch_size: int, seq_len: int) -> jnp.ndarray:
         """Initialize hidden state"""
+        self.A = jnp.zeros((batch_size, batch_size))
         return jnp.zeros((batch_size, self.hidden_size)) # seq_len
 
     def fast_forward(self, params: dict, x: jnp.ndarray, h: jnp.ndarray) -> jnp.ndarray:
@@ -69,28 +71,37 @@ class RNNCell:
         # h0(t+1) -> standard RNN update
         h_next = self.activation(
                 jnp.dot(x, params['W_ih'].T) +
-                jnp.dot(h[:,self.t,:], params['W_hh'].T)
+                jnp.dot(h, params['W_hh'].T)
             )
         h_s_next = h_next.copy()
         h_fast = jnp.zeros_like(h_next)
         
-        # h_s(t+1) -> fast weights update
-        for s in range(2):
-            # A(t)h_s(t+1)
-            for tau in range(1, self.t):
-                temp = jnp.dot(jnp.transpose(h[:,tau,:]), 
-                                h_next)
-                h_fast += self.lr_lambda**(self.t - tau) * jnp.dot(
-                                                                h[:,tau,:], 
-                                                                temp
-                                                                )
-            h_fast = self.lr_eta * h_fast
-            
-            # h_s+1(t+1) = f([Wh(t) + Cx(t)]) + A(t)h_s(t+1))
-            h_s_next = h_next + h_fast
+        self.A = self.lr_lambda * self.A + self.lr_eta * jnp.dot(h, 
+                                                            jnp.transpose(h))
 
+        # h_s(t+1) -> fast weights update with simulation equations
+        # for s in range(2):
+        #     # A(t)h_s(t+1)
+        #     for tau in range(1, self.t):
+        #         temp = jnp.dot(jnp.transpose(h[:,tau,:]), 
+        #                         h_next)
+        #         h_fast += self.lr_lambda**(self.t - tau) * jnp.dot(
+        #                                                         h[:,tau,:], 
+        #                                                         temp
+        #                                                         )
+        #     h_fast = self.lr_eta * h_fast
+            
+        #     # h_s+1(t+1) = f([Wh(t) + Cx(t)]) + A(t)h_s(t+1))
+        #     h_s_next = h_next + h_fast
+
+        # fast weights update with equation 2
+        for s in range(2):
+            h_s_next = h_next + jnp.dot(self.A, h_s_next)
+
+        # # fast weights update with equation 3
         # h[:,self.t+1,:] = h_s_next
-        h = h.at[:,self.t,:].set(h_s_next)
+        # h = h.at[:,self.t,:].set(h_s_next)
+
         return h_s_next
 
     def __call__(self, params: dict, x: jnp.ndarray, 
@@ -248,7 +259,7 @@ class RNN:
 
         return params
     
-    def init_hidden_states(self, batch_size: int, seq_len: int):
+    def init_hidden_states(self, batch_size: int, seq_len: int=None):
         """Initialize hidden states for all layers"""
         # if self.cell_type == 'lstm':
         #     return [cell.init_hidden(batch_size) for cell in self.cells]
