@@ -100,9 +100,9 @@ if [ $VANILLA_STATUS -eq 0 ]; then
     if [ -n "$VANILLA_RESULTS" ]; then
         echo "  Results: $VANILLA_RESULTS"
         echo "  Analyzing results..."
-        cd src
+        cd "$PROJECT_DIR/src"
         "$PYTHON_BIN" analyze_results.py "$VANILLA_RESULTS" 2>/dev/null || echo "  (Analysis plots will be generated separately)"
-        cd ..
+        cd "$PROJECT_DIR"
     fi
 else
     echo "✗ Vanilla RNN experiment failed (exit code: $VANILLA_STATUS)"
@@ -119,9 +119,9 @@ if [ $FAST_STATUS -eq 0 ]; then
     if [ -n "$FAST_RESULTS" ]; then
         echo "  Results: $FAST_RESULTS"
         echo "  Analyzing results..."
-        cd src
+        cd "$PROJECT_DIR/src"
         "$PYTHON_BIN" analyze_results.py "$FAST_RESULTS" 2>/dev/null || echo "  (Analysis plots will be generated separately)"
-        cd ..
+        cd "$PROJECT_DIR"
     fi
 else
     echo "✗ Fast Weights RNN experiment failed (exit code: $FAST_STATUS)"

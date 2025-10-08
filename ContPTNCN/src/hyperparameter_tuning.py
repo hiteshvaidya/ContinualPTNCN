@@ -165,7 +165,8 @@ def train_trial(config: Dict[str, Any], data_loader: PTBDataLoader,
             progress_bar.set_postfix({'loss': f'{loss:.4f}'})
             
             # Limit training batches to speed up tuning
-            if num_batches >= config.get('max_train_batches', 200):
+            max_train_batches = config.get('max_train_batches', 200)
+            if max_train_batches is not None and num_batches >= max_train_batches:
                 break
         
         # Calculate average training loss
