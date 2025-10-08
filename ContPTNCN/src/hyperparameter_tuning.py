@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Hyperparameter tuning for RNN on Penn Treebank character-level modeling
-Explores different configurations to find optimal performance
+Supports both vanilla RNN and Fast Weights experiments with GPU selection
 """
 
 import jax
@@ -14,10 +14,13 @@ from utils.ptb_data_loader import PTBDataLoader
 import time
 import json
 import os
+import sys
+import argparse
 from datetime import datetime
+from itertools import product
 from typing import Dict, Any, List, Tuple
 
-def cross_entropy_loss(logits: jnp.ndarray, targets: jnp.ndarray) -> jnp.ndarray:
+def cross_entropy_loss(logits: jnp.ndarray, targets: jnp.ndarray, task: str = 'next_char') -> jnp.ndarray:
     """Cross-entropy loss for language modeling (in bits per character)"""
     batch_size, seq_len, vocab_size = logits.shape
     
@@ -25,8 +28,9 @@ def cross_entropy_loss(logits: jnp.ndarray, targets: jnp.ndarray) -> jnp.ndarray
     targets_flat = targets.reshape(-1)
     
     log_probs = jax.nn.log_softmax(logits_flat, axis=-1)
-    # Convert to bits per character
-    log_probs = log_probs / jnp.log(2)
+    if task == 'next_char':
+        # Convert to bits per character
+        log_probs = log_probs / jnp.log(2)
     
     target_log_probs = log_probs[jnp.arange(targets_flat.shape[0]), targets_flat]
     
@@ -36,12 +40,14 @@ def create_train_step(model: RNN):
     """Create a training step for PTB language modeling"""
     
     def train_step(params: dict, x_batch: jnp.ndarray, y_batch: jnp.ndarray,
-                   learning_rate: float = 0.001):
+                   learning_rate: float = 0.001, task: str = 'next_char',
+                   fast: bool = False, S: int = 0):
         """Single training step with gradient descent"""
 
         def loss_fn(params):
-            logits, _ = model.forward_sequence(params, x_batch, task='next_char', fast=False)
-            return cross_entropy_loss(logits, y_batch)
+            logits, _ = model.forward_sequence(params, x_batch, task=task, 
+                                               fast=fast, S=S)
+            return cross_entropy_loss(logits, y_batch, task)
         
         loss, grads = jax.value_and_grad(loss_fn)(params)
 
@@ -54,19 +60,20 @@ def create_train_step(model: RNN):
     return train_step
 
 def evaluate_model(model: RNN, params: dict, data_loader: PTBDataLoader, 
-                   dataset: str = 'valid', max_batches: int = 20) -> float:
+                   dataset: str = 'valid', max_batches: int = 20,
+                   task: str = 'next_char', fast: bool = False, S: int = 0) -> float:
     """Evaluate model on validation or test set"""
     if dataset == 'valid':
-        batches = data_loader.get_valid_batches(task='next_char')
+        batches = data_loader.get_valid_batches(task=task)
     else:
-        batches = data_loader.get_test_batches(task='next_char')
+        batches = data_loader.get_test_batches(task=task)
     
     total_loss = 0.0
     num_batches = 0
     
     for x_batch, y_batch in batches:
-        logits, _ = model.forward_sequence(params, x_batch, task='next_char', fast=False)
-        loss = cross_entropy_loss(logits, y_batch)
+        logits, _ = model.forward_sequence(params, x_batch, task=task, fast=fast, S=S)
+        loss = cross_entropy_loss(logits, y_batch, task)
         total_loss += loss
         num_batches += 1
         
@@ -96,7 +103,7 @@ def train_trial(config: Dict[str, Any], data_loader: PTBDataLoader,
         hidden_size=config['hidden_size'],
         output_size=data_loader.vocab_size,
         num_layers=config['num_layers'],
-        cell_type='rnn',  # Fixed as per requirement
+        cell_type=config.get('cell_type', 'rnn'),
         activation=config.get('activation', 'tanh')
     )
     
@@ -111,6 +118,9 @@ def train_trial(config: Dict[str, Any], data_loader: PTBDataLoader,
     learning_rate = config['learning_rate']
     batch_size = config['batch_size']
     seq_len = config['seq_len']
+    task = config.get('task', 'next_char')
+    fast_choice = config.get('fast_choice', False)
+    S = config.get('S', 0)
     
     # Recreate data loader with trial-specific batch size and seq_len
     trial_data_loader = PTBDataLoader(
@@ -132,6 +142,7 @@ def train_trial(config: Dict[str, Any], data_loader: PTBDataLoader,
     start_time = time.time()
     
     print(f"\nStarting training for {num_epochs} epochs...")
+    print(f"  Fast Weights: {fast_choice}, S: {S}")
     
     for epoch in range(num_epochs):
         epoch_start_time = time.time()
@@ -139,12 +150,13 @@ def train_trial(config: Dict[str, Any], data_loader: PTBDataLoader,
         num_batches = 0
         
         # Training loop
-        progress_bar = tqdm(trial_data_loader.get_train_batches(task='next_char'), 
+        progress_bar = tqdm(trial_data_loader.get_train_batches(task=task), 
                            desc=f"Epoch {epoch+1}/{num_epochs}",
                            leave=False)
         
         for x_batch, y_batch in progress_bar:
-            params, loss = train_step(params, x_batch, y_batch, learning_rate)
+            params, loss = train_step(params, x_batch, y_batch, learning_rate, 
+                                     task, fast_choice, S)
             
             epoch_loss += loss
             num_batches += 1
@@ -161,7 +173,8 @@ def train_trial(config: Dict[str, Any], data_loader: PTBDataLoader,
         
         # Validation
         valid_loss = evaluate_model(model, params, trial_data_loader, 'valid', 
-                                   max_batches=config.get('max_valid_batches', 20))
+                                   max_batches=config.get('max_valid_batches', 20),
+                                   task=task, fast=fast_choice, S=S)
         
         epoch_time = time.time() - epoch_start_time
         
@@ -441,8 +454,53 @@ def summarize_results(results_dir: str):
     
     print(f"\nSummary saved to {summary_file}")
 
+def load_config_file(config_path: str) -> Dict[str, Any]:
+    """Load experiment configuration from JSON file"""
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    return config
+
+def generate_trials_from_config(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Generate trial configurations from config file"""
+    search_space = config['search_space']
+    fixed_params = config.get('fixed_params', {})
+    
+    # Get all parameter combinations
+    keys = list(search_space.keys())
+    values = [search_space[k] for k in keys]
+    
+    all_combinations = list(product(*values))
+    
+    # Limit to num_trials if specified
+    num_trials = config.get('num_trials')
+    if num_trials and num_trials < len(all_combinations):
+        np.random.shuffle(all_combinations)
+        all_combinations = all_combinations[:num_trials]
+    
+    # Convert to trial configs
+    trials = []
+    for idx, combo in enumerate(all_combinations, 1):
+        trial = {keys[i]: combo[i] for i in range(len(keys))}
+        trial.update(fixed_params)
+        trial['name'] = f"Trial_{idx}"
+        trial['num_epochs'] = config['num_epochs']
+        trial['task'] = config.get('task', 'next_char')
+        trial['cell_type'] = config.get('cell_type', 'rnn')
+        trial['fast_choice'] = config.get('fast_choice', False)
+        trial['S'] = trial.get('S', config.get('S', 0))  # Use trial-specific S or default
+        trial['max_train_batches'] = config.get('max_train_batches')
+        trial['max_valid_batches'] = config.get('max_valid_batches', 20)
+        trials.append(trial)
+    
+    return trials
+
 def main():
     """Main hyperparameter tuning routine"""
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='RNN Hyperparameter Tuning')
+    parser.add_argument('--config', type=str, help='Path to configuration JSON file')
+    args = parser.parse_args()
     
     print("=" * 80)
     print("RNN HYPERPARAMETER TUNING - Penn Treebank Character-Level Modeling")
@@ -452,14 +510,32 @@ def main():
     devices = jax.devices()
     print(f"\nAvailable devices: {devices}")
     
-    if jax.devices('gpu'):
-        print("Using GPU backend")
+    # Load configuration or use defaults
+    if args.config:
+        print(f"\nLoading configuration from: {args.config}")
+        exp_config = load_config_file(args.config)
+        
+        # Set GPU if specified
+        gpu_id = exp_config.get('gpu_id')
+        if gpu_id is not None:
+            os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+            print(f"Using GPU: {gpu_id}")
+        
+        data_dir = exp_config.get('data_dir', '../data/ptb_char')
+        experiment_name = exp_config.get('experiment_name', 'hyperparameter_tuning')
     else:
-        print('No GPU found, using CPU backend')
-        jax.config.update('jax_platform_name', 'cpu')
+        print("\nNo configuration file specified, using defaults")
+        exp_config = None
+        data_dir = "../data/ptb_char"
+        experiment_name = "hyperparameter_tuning"
+        
+        if jax.devices('gpu'):
+            print("Using GPU backend")
+        else:
+            print('No GPU found, using CPU backend')
+            jax.config.update('jax_platform_name', 'cpu')
     
     # Load data
-    data_dir = "../data/ptb_char"
     print(f"\nLoading data from {data_dir}")
     
     try:
@@ -470,13 +546,19 @@ def main():
         return
     
     # Create results directory
-    results_dir = f"../results/hyperparameter_tuning_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    results_dir = f"../results/{experiment_name}_{timestamp}"
     os.makedirs(results_dir, exist_ok=True)
     print(f"Results will be saved to: {results_dir}")
     
     # Generate trial configurations
-    trials = generate_trial_configurations()
-    print(f"\nGenerated {len(trials)} trial configurations")
+    if exp_config:
+        trials = generate_trials_from_config(exp_config)
+        print(f"\nGenerated {len(trials)} trial configurations from config file")
+        print(f"Experiment: {exp_config.get('description', 'N/A')}")
+    else:
+        trials = generate_trial_configurations()
+        print(f"\nGenerated {len(trials)} trial configurations (default)")
     
     # Run trials
     all_results = []

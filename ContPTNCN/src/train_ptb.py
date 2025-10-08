@@ -40,12 +40,12 @@ def create_train_step_ptb(model: RNN):
     
     def train_step(params: dict, x_batch: jnp.ndarray, y_batch: jnp.ndarray,
                    learning_rate: float = 0.001, task: str = None, 
-                   fast: bool = False):
+                   fast: bool = False, S: int = 2):
         """Single training step with gradient descent"""
 
         def loss_fn(params):
             # Forward pass through the model
-            logits, _ = model.forward_sequence(params, x_batch, task, fast=fast)
+            logits, _ = model.forward_sequence(params, x_batch, task, fast=fast, S=S)
             return cross_entropy_loss(logits, y_batch, task)
         
         loss, grads = jax.value_and_grad(loss_fn)(params)
@@ -249,7 +249,8 @@ def main():
     cell_type = 'rnn'  # Use LSTM for better performance on long sequences
     task = 'next_char'
     fast_choice = True
-    
+    S = 2
+
     print(f"Creating {cell_type.upper()} model:")
     print(f"  Vocab size: {vocab_size}")
     print(f"  Embedding dim: {embedding_dim}")
@@ -266,8 +267,11 @@ def main():
         cell_type=cell_type
     )
     
-    # Initialize parameters
-    params = model.init_params(key)
+    # Initialize parameters (with fast weights if enabled)
+    params = model.init_params(key, use_fast_weights=fast_choice)
+    print(f"Fast weights enabled: {fast_choice}")
+    if fast_choice:
+        print(f"Fast weights S parameter: {S}")
     # print(f"Model initialized with {sum(p.size for p in jax.tree_util.tree_leaves(params))} parameters")
     
     # Create training function
@@ -295,7 +299,7 @@ def main():
         for x_batch, y_batch in tqdm(data_loader.get_train_batches(task)):
             # Training step
             params, loss = train_step(params, x_batch, y_batch, 
-                                      learning_rate, task, fast=fast_choice)
+                                      learning_rate, task, fast=fast_choice, S=S)
             
             epoch_loss += loss
             num_batches += 1

@@ -15,14 +15,9 @@ class RNNCell:
         self.hidden_size = hidden_size
         self.input_size = input_size
         self.activation = self._get_activation(activation)
-        self.lr_lambda = 0.9
-        self.lr_eta = 0.1
-        self.t = 0
-        self.hidden_states = []
-        self.A = None
-
-    def _increment_time(self):
-        self.t += 1
+        # Fast weights hyperparameters
+        self.lr_lambda = 0.95  # Decay rate for fast weights
+        self.lr_eta = 0.5      # Learning rate for fast weights
 
     def _get_activation(self, activation: str) -> Callable:
         """Get activation function"""
@@ -34,8 +29,13 @@ class RNNCell:
         }
         return activations.get(activation, jnp.tanh)
     
-    def init_params(self, key: jax.random.PRNGKey) -> dict:
-        """initialize RNN parameters"""
+    def init_params(self, key: jax.random.PRNGKey, use_fast_weights: bool = False) -> dict:
+        """Initialize RNN parameters
+        
+        Args:
+            key: Random key for initialization
+            use_fast_weights: If True, initialize fast weights matrix A
+        """
         k1, k2, k3 = random.split(key, 3)
 
         # Xavier/Glorot initialization for input-to-hidden weights
@@ -43,14 +43,18 @@ class RNNCell:
         
         # Orthogonal initialization for hidden-to-hidden weights
         W_hh_init = random.normal(k2, (self.hidden_size, self.hidden_size))
-        # W_hh_orthogonal = self._orthogonal_init(W_hh_init)
 
         params = {
             'W_ih': random.normal(k1, (self.hidden_size, self.input_size)) * w_ih_std,
             'W_hh': W_hh_init,
             'b_h': jnp.zeros((self.hidden_size)),
-            # 'hidden_states': [],
         }
+        
+        # Initialize fast weights matrix if needed
+        if use_fast_weights:
+            # A is (hidden_size, hidden_size) - initialized to zeros
+            params['A'] = jnp.zeros((self.hidden_size, self.hidden_size))
+        
         return params
     
     def _orthogonal_init(self, matrix: jnp.ndarray) -> jnp.ndarray:
@@ -61,54 +65,52 @@ class RNNCell:
         q = q * jnp.sign(d)
         return q
     
-    def init_hidden(self, batch_size: int, seq_len: int) -> jnp.ndarray:
+    def init_hidden(self, batch_size: int, seq_len: int = None) -> jnp.ndarray:
         """Initialize hidden state"""
-        self.A = jnp.zeros((batch_size, batch_size))
-        return jnp.zeros((batch_size, self.hidden_size)) # seq_len
+        return jnp.zeros((batch_size, self.hidden_size))
 
-    def fast_forward(self, params: dict, x: jnp.ndarray, h: jnp.ndarray) -> jnp.ndarray:
-        """Fast forward pass for multiple time steps"""
-        # h0(t+1) -> standard RNN update
-        h_next = self.activation(
-                jnp.dot(x, params['W_ih'].T) +
-                jnp.dot(h, params['W_hh'].T)
-            )
-        h_s_next = h_next.copy()
-        h_fast = jnp.zeros_like(h_next)
+    def fast_forward(self, params: dict, x: jnp.ndarray, h: jnp.ndarray, S: int) -> jnp.ndarray:
+        """Fast forward pass with fast weights
         
-        self.A = self.lr_lambda * self.A + self.lr_eta * jnp.dot(h, 
-                                                            jnp.transpose(h))
-
-        # h_s(t+1) -> fast weights update with simulation equations
-        # for s in range(2):
-        #     # A(t)h_s(t+1)
-        #     for tau in range(1, self.t):
-        #         temp = jnp.dot(jnp.transpose(h[:,tau,:]), 
-        #                         h_next)
-        #         h_fast += self.lr_lambda**(self.t - tau) * jnp.dot(
-        #                                                         h[:,tau,:], 
-        #                                                         temp
-        #                                                         )
-        #     h_fast = self.lr_eta * h_fast
-            
-        #     # h_s+1(t+1) = f([Wh(t) + Cx(t)]) + A(t)h_s(t+1))
-        #     h_s_next = h_next + h_fast
-
-        # fast weights update with equation 2
-        for s in range(2):
-            h_s_next = h_next + jnp.dot(self.A, h_s_next)
-
-        # # fast weights update with equation 3
-        # h[:,self.t+1,:] = h_s_next
-        # h = h.at[:,self.t,:].set(h_s_next)
-
-        return h_s_next
+        Implements the fast weights mechanism:
+        A(t) = λA(t-1) + η*h(t)h(t)^T
+        For s in 1..S: h_s = f(W*x + C*h_{s-1} + A(t)*h_{s-1})
+        
+        Args:
+            params: Must include 'A' - the fast weights matrix (hidden_size, hidden_size)
+            x: Input (batch_size, input_size)
+            h: Previous hidden state (batch_size, hidden_size)
+            S: Number of inner loop iterations
+        """
+        # Standard RNN computation: h0 = tanh(W_ih*x + W_hh*h + b)
+        h_0 = self.activation(
+            jnp.dot(x, params['W_ih'].T) +
+            jnp.dot(h, params['W_hh'].T) +
+            params['b_h']
+        )
+        
+        # Initialize or get fast weights matrix A
+        # A should be in params and updated externally to maintain JAX purity
+        if 'A' not in params:
+            # If A not in params, just return standard RNN output
+            return h_0
+        
+        A = params['A']  # Shape: (hidden_size, hidden_size)
+        
+        # Inner loop: iterate S times with fast weights
+        h_s = h_0
+        for s in range(S):
+            # h_s = h_0 + A @ h_{s-1}
+            # Apply fast weights transformation
+            h_s = self.activation(h_0 + jnp.dot(h_s, A.T))
+        
+        return h_s
 
     def __call__(self, params: dict, x: jnp.ndarray, 
-                 h: jnp.ndarray, fast=False) -> jnp.ndarray:
+                 h: jnp.ndarray, fast: bool = False, S: int = 2) -> jnp.ndarray:
         """forward pass for one time step"""
         if fast:
-            return self.fast_forward(params, x, h)
+            return self.fast_forward(params, x, h, S)
         else:
             h_new = self.activation(
                 jnp.dot(x, params['W_ih'].T) +
@@ -238,8 +240,13 @@ class RNN:
             self.cells = [RNNCell(hidden_size, embedding_dim if i == 0 else hidden_size, activation) for i in range(num_layers)]
 
         
-    def init_params(self, key: jax.random.PRNGKey) -> dict:
-        """Initialize all parameters including embedding layer"""
+    def init_params(self, key: jax.random.PRNGKey, use_fast_weights: bool = False) -> dict:
+        """Initialize all parameters including embedding layer
+        
+        Args:
+            key: Random key for initialization
+            use_fast_weights: If True, initialize fast weights for RNN cells
+        """
         keys = random.split(key, self.num_layers + 3)
 
         params = {}
@@ -250,7 +257,10 @@ class RNN:
 
         # Initialize cell parameters
         for i, cell in enumerate(self.cells):
-            params[f'layer_{i}'] = cell.init_params(keys[i + 1])
+            if self.cell_type == 'lstm':
+                params[f'layer_{i}'] = cell.init_params(keys[i + 1])
+            else:
+                params[f'layer_{i}'] = cell.init_params(keys[i + 1], use_fast_weights)
 
         # Output layer for character prediction (vocab_size classes)
         w_out_std = jnp.sqrt(2.0 / (self.hidden_size + self.vocab_size))
@@ -263,12 +273,12 @@ class RNN:
         """Initialize hidden states for all layers"""
         # if self.cell_type == 'lstm':
         #     return [cell.init_hidden(batch_size) for cell in self.cells]
-        # else:
+        # else: 
         return tuple(cell.init_hidden(batch_size, seq_len) for cell in self.cells)
     
     def forward_step(self, params: dict, x: jnp.ndarray, 
                      states,
-                     fast: bool=False, t: int = None):
+                     fast: bool=False, S: int = None):
         """Forward pass for one time step"""
         current_input = x
         new_states = []
@@ -284,18 +294,17 @@ class RNN:
                 new_states.append(state_new)
                 current_input = h_new
             else:
-                h_new = cell(layer_params, current_input, state, fast)
+                h_new = cell(layer_params, current_input, state, fast, S)
                 new_states.append(h_new)
                 current_input = h_new
-                cell._increment_time()  # Increment time step for fast weights
 
         # Output layer
         output = jnp.dot(current_input, params['W_out'].T) + params['b_out']
 
         return output, tuple(new_states)
     
-    def forward_sequence(self, params: dict, x_seq: jnp.ndarray, 
-                         task: str, initial_states=None, fast=False):
+    def forward_sequence(self, params: dict, x_seq: jnp.ndarray, task: str, 
+                         initial_states=None, fast=False, S: int = 2):
         """Forward pass for character index sequences"""
         batch_size, seq_len = x_seq.shape  # x_seq contains character indices
 
@@ -308,15 +317,16 @@ class RNN:
             init_states = initial_states
 
         outputs = []
+        current_states = init_states
 
         # Process sequence timestep by timestep
         for t in range(seq_len):
             current_input = embedded_seq[:, t, :]  # Shape: (batch_size, embedding_dim)
-            output, states = self.forward_step(params, current_input, init_states, fast)
+            output, current_states = self.forward_step(params, current_input, current_states, fast, S)
             outputs.append(output)
 
         
-        return jnp.stack(outputs, axis=1), states  # Shape: (batch_size, seq_len, vocab_size)
+        return jnp.stack(outputs, axis=1), current_states  # Shape: (batch_size, seq_len, vocab_size)
     
     def forward_sequence_copy_task(self, params: dict, x_seq: jnp.ndarray, initial_states=None):
         """Forward pass specifically designed for copy task
