@@ -5,8 +5,10 @@ import numpy as np
 from tqdm import tqdm
 from models.rnn import create_rnn_model, RNN, create_copy_task_train_step, copy_task_loss
 from utils.ptb_data_loader import PTBDataLoader
+from utils.gradient_viz import GradientTracker, print_gradient_summary
 import time
 import math
+import os
 
 def cross_entropy_loss(logits: jnp.ndarray, targets: jnp.ndarray, task: str = None) -> jnp.ndarray:
     """Cross-entropy loss for language modeling"""
@@ -38,22 +40,43 @@ def perplexity(loss: float) -> float:
 def create_train_step_ptb(model: RNN):
     """Create a JIT-compiled training step for PTB language modeling"""
     
+    def clip_gradients(grads, max_norm: float = 5.0):
+        """Clip gradients by global norm"""
+        # compute global norm
+        global_norm = jnp.sqrt(sum([jnp.sum(g**2) for g in jax.tree_util.tree_leaves(grads)]))
+
+        # compute clipping coefficient
+        clip_coef = max_norm / (global_norm + 1e-6)
+        clip_coef = jnp.minimum(clip_coef, 1.0)
+
+        # Apply clipping
+        clipped_grads = jax.tree.map(lambda g: g * clip_coef, grads)
+
+        return clipped_grads, global_norm
+
     def train_step(params: dict, x_batch: jnp.ndarray, y_batch: jnp.ndarray,
+                   states: jnp.ndarray = None,
                    learning_rate: float = 0.001, task: str = None, 
-                   fast: bool = False, S: int = 2):
+                   fast: bool = False, S: int = 2, return_grads: bool = False):
         """Single training step with gradient descent"""
 
         def loss_fn(params):
             # Forward pass through the model
-            logits, _ = model.forward_sequence(params, x_batch, task, fast=fast, S=S)
-            return cross_entropy_loss(logits, y_batch, task)
+            logits, _ = model.forward_sequence(params, x_batch, task,
+                                               initial_states=states, fast=fast, S=S)
+            loss = cross_entropy_loss(logits, y_batch, task)
+            
+            return loss
         
         loss, grads = jax.value_and_grad(loss_fn)(params)
 
         # Update parameters with gradient clipping
-        grads = jax.tree.map(lambda g: jnp.clip(g, -5.0, 5.0), grads)
-        params = jax.tree.map(lambda p, g: p - learning_rate * g, params, grads)
+        # clipped_grads = jax.tree.map(lambda g: jnp.clip(g, -5.0, 5.0), grads)
+        clipped_grads, global_norm = clip_gradients(grads, max_norm=5.0)
+        params = jax.tree.map(lambda p, g: p - learning_rate * g, params, clipped_grads)
 
+        if return_grads:
+            return params, loss, grads
         return params, loss
     
     # Apply jit compilation with static_argnums after function definition
@@ -249,7 +272,7 @@ def main():
     cell_type = 'rnn'  # Use LSTM for better performance on long sequences
     task = 'next_char'
     fast_choice = True
-    S = 2
+    S = 3
 
     print(f"Creating {cell_type.upper()} model:")
     print(f"  Vocab size: {vocab_size}")
@@ -269,9 +292,6 @@ def main():
     
     # Initialize parameters (with fast weights if enabled)
     params = model.init_params(key, use_fast_weights=fast_choice)
-    print(f"Fast weights enabled: {fast_choice}")
-    if fast_choice:
-        print(f"Fast weights S parameter: {S}")
     # print(f"Model initialized with {sum(p.size for p in jax.tree_util.tree_leaves(params))} parameters")
     
     # Create training function
@@ -279,12 +299,18 @@ def main():
     # train_step = create_copy_task_train_step(model, data_loader.seq_len, data_loader.padding)
     
     # Training configuration
-    num_epochs = 10
+    num_epochs = 25
     learning_rate = 0.01  # Higher learning rate for copy task
     eval_every = 200  # More frequent evaluation to track progress
     
+    # Gradient visualization setup
+    gradient_tracker = GradientTracker(track_interval=50)
+    gradient_output_dir = "gradient_plots"
+    os.makedirs(gradient_output_dir, exist_ok=True)
+    
     print(f"\nStarting training for {num_epochs} epochs...")
     print(f"Learning rate: {learning_rate}")
+    print(f"Gradient plots will be saved to: {gradient_output_dir}")
     
     step = 0
     best_valid_loss = float('inf')
@@ -293,32 +319,49 @@ def main():
         epoch_start_time = time.time()
         epoch_loss = 0.0
         num_batches = 0
-        
+
         tqdm.write(f"Epoch {epoch + 1}/{num_epochs}")
         # Training loop
         for x_batch, y_batch in tqdm(data_loader.get_train_batches(task)):
-            # Training step
-            params, loss = train_step(params, x_batch, y_batch, 
-                                      learning_rate, task, fast=fast_choice, S=S)
+            states = model.init_hidden_states(data_loader.batch_size,
+                                              fast_weights=fast_choice,
+                                              )
+            
+            # Track gradients at regular intervals
+            should_track_grads = gradient_tracker.should_track(step)
+            
+            # Training step (with optional gradient return)
+            if should_track_grads:
+                params, loss, grads = train_step(params, x_batch, y_batch, 
+                                                states=states,
+                                                learning_rate=learning_rate, task=task,
+                                                fast=fast_choice, S=S, return_grads=True)
+                # Track gradients
+                gradient_tracker.add_gradients(grads, step)
+                
+                # Print gradient summary every 200 steps
+                if step % 200 == 0:
+                    print_gradient_summary(gradient_tracker.get_latest_stats(), step)
+            else:
+                params, loss = train_step(params, x_batch, y_batch, 
+                                         states=states,
+                                         learning_rate=learning_rate, task=task,
+                                         fast=fast_choice, S=S, return_grads=False)
             
             epoch_loss += loss
             num_batches += 1
             step += 1
             
-            # Evaluation
+            # Evaluation and gradient plotting
             if step % eval_every == 0:
                 valid_loss, valid_ppl = evaluate_model(model, params, data_loader, 'valid', task=task)
                 print(f"Step {step}: Train BPC = {loss:.4f}, Valid BPC = {valid_loss:.4f}, Valid PPL = {valid_ppl:.2f}")
-                # accuracy, correct, total = evaluate_copy_accuracy(model, params, data_loader, 5)
-                # print(f"Step {step}: Train Loss = {loss:.4f}, Valid Loss = {valid_loss:.4f}")
-                # print(f"Copy Accuracy: {accuracy:.2%} ({correct}/{total})")
                 
-                # Debug: Check what the model is actually predicting
-                # logits, _ = model.forward_sequence_copy_task(params, x_batch[:1])  # Just first example
-                # predictions = jnp.argmax(logits[0], axis=-1)  # Shape: (2*seq_len,)
-                # print(f"Debug - Sample predictions in copy region: {predictions[data_loader.seq_len:data_loader.seq_len+10]}")
-                # print(f"Debug - Sample targets in copy region: {y_batch[0, data_loader.seq_len:data_loader.seq_len+10]}")
-                # print(f"Debug - Padding token: {data_loader.padding}")
+                # Generate gradient plots every 1000 steps
+                if step % 1000 == 0 and len(gradient_tracker.step_numbers) > 5:
+                    print(f"\nGenerating gradient plots at step {step}...")
+                    gradient_tracker.plot_all(gradient_output_dir, step)
+                    print(f"Gradient plots saved to {gradient_output_dir}/\n")
                 
                 # Save best model
                 if valid_loss < best_valid_loss:
@@ -347,6 +390,16 @@ def main():
     
     print(f"Validation: Loss = {valid_loss:.4f}, Perplexity = {valid_ppl:.2f}")
     print(f"Test: Loss = {test_loss:.4f}, Perplexity = {test_ppl:.2f}")
+    
+    # Generate final gradient plots
+    if len(gradient_tracker.step_numbers) > 0:
+        print("\nGenerating final gradient analysis...")
+        gradient_tracker.plot_all(gradient_output_dir, step)
+        print(f"Final gradient plots saved to {gradient_output_dir}/")
+        
+        # Print final gradient summary
+        print("\nFinal Gradient Statistics:")
+        print_gradient_summary(gradient_tracker.get_latest_stats(), step)
     
     # Generate final sample
     print("\nGenerated text samples:")

@@ -21,7 +21,7 @@ if [ ! -f "$VENV_PATH/bin/activate" ]; then
     exit 1
 fi
 
-. "$VENV_PATH/bin/activate"
+source "$VENV_PATH/bin/activate"
 echo "✓ Environment activated"
 echo "  Python: $(which python)"
 echo ""

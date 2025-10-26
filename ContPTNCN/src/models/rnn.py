@@ -18,6 +18,8 @@ class RNNCell:
         # Fast weights hyperparameters
         self.lr_lambda = 0.95  # Decay rate for fast weights
         self.lr_eta = 0.5      # Learning rate for fast weights
+        self.A = None
+        self.h_states = None
 
     def _get_activation(self, activation: str) -> Callable:
         """Get activation function"""
@@ -50,11 +52,6 @@ class RNNCell:
             'b_h': jnp.zeros((self.hidden_size)),
         }
         
-        # Initialize fast weights matrix if needed
-        if use_fast_weights:
-            # A is (hidden_size, hidden_size) - initialized to zeros
-            params['A'] = jnp.zeros((self.hidden_size, self.hidden_size))
-        
         return params
     
     def _orthogonal_init(self, matrix: jnp.ndarray) -> jnp.ndarray:
@@ -65,11 +62,36 @@ class RNNCell:
         q = q * jnp.sign(d)
         return q
     
-    def init_hidden(self, batch_size: int, seq_len: int = None) -> jnp.ndarray:
+    def init_hidden(self, batch_size: int, seq_len: int = None, fast_weights: bool = False) -> jnp.ndarray:
         """Initialize hidden state"""
+        if fast_weights:
+            self.A = jnp.zeros((self.hidden_size, self.hidden_size))
         return jnp.zeros((batch_size, self.hidden_size))
 
-    def fast_forward(self, params: dict, x: jnp.ndarray, h: jnp.ndarray, S: int) -> jnp.ndarray:
+    def init_hidden_states(self, batch_size: int, seq_len: int):
+        """
+        Store hidden states for implementing eq(4) from the paper for batch processing
+        """
+        self.h_states = jnp.zeros((batch_size, seq_len+1, self.hidden_size))
+
+    def get_attention(self, h_s, current_t):
+        """implement eq(4) from the paper for batch processing"""
+        if current_t < 1:
+            return jnp.zeros_like(h_s)
+        
+        # Get all relevant hidden states at once: (batch_size, current_t, hidden_size)
+        h_history = self.h_states[:, :current_t, :] # tau in [1, current_t]
+
+        # compute all dot products at once: (batch_size, current_t)
+        # For each batch and each tau: h_hat^T * h_s
+        dot_products = jnp.einsum('bth,bh->bt', h_history, h_s)  # Shape: (batch_size, current_t)
+
+        attention = jnp.zeros((self.hidden_size, self.hidden_size))
+        for t in range(1, current_t):
+            attention += self.lr_lambda**(current_t - t) * self.h_states[:, t+1, :] * jnp.dot(self.h_states[:, t+1, :].T, h_s)
+        return attention
+
+    def fast_forward(self, params: dict, x: jnp.ndarray, h: jnp.ndarray, S: int, t:int=None) -> jnp.ndarray:
         """Fast forward pass with fast weights
         
         Implements the fast weights mechanism:
@@ -83,34 +105,49 @@ class RNNCell:
             S: Number of inner loop iterations
         """
         # Standard RNN computation: h0 = tanh(W_ih*x + W_hh*h + b)
-        h_0 = self.activation(
+        h_tp1 = self.activation(
             jnp.dot(x, params['W_ih'].T) +
             jnp.dot(h, params['W_hh'].T) +
             params['b_h']
         )
         
-        # Initialize or get fast weights matrix A
-        # A should be in params and updated externally to maintain JAX purity
-        if 'A' not in params:
-            # If A not in params, just return standard RNN output
-            return h_0
-        
-        A = params['A']  # Shape: (hidden_size, hidden_size)
-        
         # Inner loop: iterate S times with fast weights
-        h_s = h_0
-        for s in range(S):
-            # h_s = h_0 + A @ h_{s-1}
-            # Apply fast weights transformation
-            h_s = self.activation(h_0 + jnp.dot(h_s, A.T))
+        h_s = h_tp1
         
+        
+        h_history = self.h_states[:, :t, :]  # Update history with new h_s
+        for s in range(S):
+            # compute all scalar/dot products at once: [batch_size, current_t]
+            # for each batch and each tau: h_hat^T * h_s
+            scalar_product = jnp.einsum('bth, bh->bt', h_history, h_s)
+            
+            # Compute L2 norms for normalization: ||h_τ||² for each τ
+            # Shape: (batch_size, t)
+            h_norms_squared = jnp.sum(h_history ** 2, axis=2) + 1e-8  # Add epsilon for stability
+            
+            # Normalize dot products by norms
+            normalized_dots = scalar_product / h_norms_squared
+            # compute decay weights: (current_t,)
+            taus = jnp.arange(1, t+1)
+            decay_weights = self.lr_lambda ** (t - taus)  # Shape: (current_t,)
+
+            # Apply decay weights to scalar products: (batch_size, current_t)
+            weighted_dots = normalized_dots * decay_weights[None, :]  
+            
+            # compute weighted sum: sum over tau dimension
+            # (batch_size, t, hidden_size) * (batch_size, t, 1) -> (batch_size, hidden_size)
+            attention = jnp.einsum('bth, bt->bh', h_history, weighted_dots)
+
+            h_s = h_tp1 + self.lr_eta * attention
+        self.h_states = self.h_states.at[:,t+1,:].set(h_s)
         return h_s
 
     def __call__(self, params: dict, x: jnp.ndarray, 
-                 h: jnp.ndarray, fast: bool = False, S: int = 2) -> jnp.ndarray:
+                 h: jnp.ndarray, fast: bool = False, S: int = 2, 
+                 t:int=None) -> jnp.ndarray:
         """forward pass for one time step"""
         if fast:
-            return self.fast_forward(params, x, h, S)
+            return self.fast_forward(params, x, h, S, t)
         else:
             h_new = self.activation(
                 jnp.dot(x, params['W_ih'].T) +
@@ -269,16 +306,16 @@ class RNN:
 
         return params
     
-    def init_hidden_states(self, batch_size: int, seq_len: int=None):
+    def init_hidden_states(self, batch_size: int, seq_len: int=None, fast_weights: bool = False):
         """Initialize hidden states for all layers"""
         # if self.cell_type == 'lstm':
         #     return [cell.init_hidden(batch_size) for cell in self.cells]
-        # else: 
-        return tuple(cell.init_hidden(batch_size, seq_len) for cell in self.cells)
+        # else:
+        return tuple(cell.init_hidden(batch_size, seq_len, fast_weights) for cell in self.cells)
     
     def forward_step(self, params: dict, x: jnp.ndarray, 
                      states,
-                     fast: bool=False, S: int = None):
+                     fast: bool=False, S: int = None, t:int=None):
         """Forward pass for one time step"""
         current_input = x
         new_states = []
@@ -294,7 +331,7 @@ class RNN:
                 new_states.append(state_new)
                 current_input = h_new
             else:
-                h_new = cell(layer_params, current_input, state, fast, S)
+                h_new = cell(layer_params, current_input, state, fast, S, t)
                 new_states.append(h_new)
                 current_input = h_new
 
@@ -312,20 +349,21 @@ class RNN:
         embedded_seq = params['embedding'][x_seq]  # Shape: (batch_size, seq_len, embedding_dim)
 
         if initial_states is None:
-            init_states = self.init_hidden_states(batch_size, seq_len)
+            current_states = self.init_hidden_states(batch_size, seq_len, fast_weights=fast)
         else:
-            init_states = initial_states
+            current_states = initial_states
+
+        for i in range(len(self.cells)):
+            if self.cell_type == 'rnn' and x_seq.shape[0] > 1:
+                self.cells[i].init_hidden_states(batch_size, seq_len)
 
         outputs = []
-        current_states = init_states
-
         # Process sequence timestep by timestep
         for t in range(seq_len):
             current_input = embedded_seq[:, t, :]  # Shape: (batch_size, embedding_dim)
-            output, current_states = self.forward_step(params, current_input, current_states, fast, S)
+            output, current_states = self.forward_step(params, current_input, current_states, fast, S, t)
             outputs.append(output)
 
-        
         return jnp.stack(outputs, axis=1), current_states  # Shape: (batch_size, seq_len, vocab_size)
     
     def forward_sequence_copy_task(self, params: dict, x_seq: jnp.ndarray, initial_states=None):
