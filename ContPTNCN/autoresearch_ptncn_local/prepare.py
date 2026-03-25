@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 
 
@@ -24,14 +25,15 @@ def main() -> None:
         if not path.exists():
             raise SystemExit(f"Missing required dataset file: {path}")
 
-    if not VENV_PYTHON.exists():
+    active_python = Path(sys.executable).resolve()
+    if not VENV_PYTHON.exists() and not active_python.exists():
         raise SystemExit(f"Missing project virtualenv python: {VENV_PYTHON}")
 
     if shutil.which("ollama") is None:
         raise SystemExit("Ollama CLI not found in PATH. Install Ollama before starting the local agent.")
 
     print(f"Dataset directory: {DATA_DIR}")
-    print(f"Project python: {VENV_PYTHON}")
+    print(f"Project python: {active_python}")
     print("Prerequisites look good.")
 
 

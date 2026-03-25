@@ -175,6 +175,7 @@ def extract_tunable_block(code: str) -> str:
 def build_experiment_prompt(train_code: str, results_history: str, best_bpb: float, crash_info: str | None = None) -> str:
     program_text = Path(PROGRAM_FILE).read_text(encoding="utf-8")
     tunable_block = extract_tunable_block(train_code)
+    crash_section = f"Last crash info:\n{crash_info}\n" if crash_info else ""
     return f"""You are an autonomous ML researcher running local PTNCN experiments.
 
 Current best val_bpb: {best_bpb:.6f}
@@ -192,7 +193,7 @@ Current tunable block from train.py:
 Results history:
 {results_history}
 
-{f"Last crash info:\n{crash_info}" if crash_info else ""}
+{crash_section}
 
 Reply with:
 1. One sentence explaining the experiment.
