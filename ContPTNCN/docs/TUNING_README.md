@@ -2,6 +2,18 @@
 
 This directory contains scripts for hyperparameter tuning of the RNN model on character-level Penn Treebank.
 
+## UV Environment Setup
+
+Before running any scripts, create and activate the virtual environment from the **repo root**:
+
+```bash
+cd /Users/hitesh/Documents/Research/ContinualPTNCN
+uv sync                      # creates .venv from uv.lock (one-time)
+source .venv/bin/activate    # activate for this session
+```
+
+Or use `uv run python ...` anywhere without activating first.
+
 ## Files
 
 - **`hyperparameter_tuning.py`**: Runs multiple trials with different configurations automatically
@@ -15,7 +27,7 @@ This directory contains scripts for hyperparameter tuning of the RNN model on ch
 This will run 12 different configurations and compare results:
 
 ```bash
-cd /data/hvaidya/ContinualPTNCN/ContPTNCN/src
+cd /Users/hitesh/Documents/Research/ContinualPTNCN/ContPTNCN/src
 python hyperparameter_tuning.py
 ```
 
@@ -45,7 +57,7 @@ Rank   Trial                      Valid BPC    Test BPC     Epochs   Time (s)
 #### Using configuration file:
 
 ```bash
-cd /data/hvaidya/ContinualPTNCN/ContPTNCN/src
+cd /Users/hitesh/Documents/Research/ContinualPTNCN/ContPTNCN/src
 python quick_trial.py --config ../configs/baseline.json
 ```
 

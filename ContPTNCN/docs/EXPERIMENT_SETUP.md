@@ -36,7 +36,7 @@ This setup runs two parallel hyperparameter tuning experiments comparing vanilla
 
 ### Quick Start
 ```bash
-cd /data/hvaidya/ContinualPTNCN/ContPTNCN
+cd /Users/hitesh/Documents/Research/ContinualPTNCN/ContPTNCN
 ./run_parallel_tuning.sh
 ```
 
@@ -56,6 +56,9 @@ CUDA_VISIBLE_DEVICES=0 uv run python src/hyperparameter_tuning.py --config confi
 CUDA_VISIBLE_DEVICES=1 uv run python src/hyperparameter_tuning.py --config configs/fast_weights_tuning.json
 ```
 
+> `uv run` automatically uses the `.venv` at the repo root without manual activation.
+> To activate manually first: `cd /Users/hitesh/Documents/Research/ContinualPTNCN && uv sync && source .venv/bin/activate`
+
 ## Monitoring Progress
 
 ### Check GPU Usage
@@ -65,6 +68,8 @@ watch -n 1 nvidia-smi
 
 ### Check Logs
 ```bash
+cd /Users/hitesh/Documents/Research/ContinualPTNCN/ContPTNCN
+
 # Vanilla RNN logs
 tail -f ../results/vanilla_rnn_*/logs/*.log
 
