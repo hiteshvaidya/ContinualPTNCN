@@ -163,6 +163,43 @@ def parse_search_replace_blocks(response: str) -> list[tuple[str, str]]:
     return [(search.rstrip("\n"), replace.rstrip("\n")) for search, replace in re.findall(pattern, response, re.DOTALL)]
 
 
+EXPLORATION_FAMILIES = [
+    ("optimization", ["learning rate", "momentum", "nesterov", "lr"]),
+    ("model_size_runtime", ["hidden", "batch", "epoch", "train batches", "eval batches"]),
+    ("fast_weights", ["fast", "lambda", "eta", "steps"]),
+    ("predictive_coding", ["beta", "alpha", "gamma", "zeta", "radius"]),
+    ("representation_dynamics", ["activation", "init"]),
+]
+
+
+def infer_recent_family(results_history: str) -> str | None:
+    lines = [line for line in results_history.strip().splitlines() if line.strip()]
+    if len(lines) <= 1:
+        return None
+
+    for line in reversed(lines[1:]):
+        parts = line.split("\t")
+        if len(parts) < 5:
+            continue
+        description = parts[4].lower()
+        for family, keywords in EXPLORATION_FAMILIES:
+            if any(keyword in description for keyword in keywords):
+                return family
+    return None
+
+
+def choose_target_family(results_history: str, experiment_num: int) -> str:
+    recent_family = infer_recent_family(results_history)
+    family_names = [family for family, _ in EXPLORATION_FAMILIES]
+
+    start_idx = experiment_num % len(family_names)
+    ordered = family_names[start_idx:] + family_names[:start_idx]
+    for family in ordered:
+        if family != recent_family:
+            return family
+    return family_names[0]
+
+
 def extract_tunable_block(code: str) -> str:
     start = code.find("# BEGIN_TUNABLES")
     end = code.find("# END_TUNABLES")
@@ -172,13 +209,22 @@ def extract_tunable_block(code: str) -> str:
     return code[start:end]
 
 
-def build_experiment_prompt(train_code: str, results_history: str, best_bpb: float, crash_info: str | None = None) -> str:
+def build_experiment_prompt(
+    train_code: str,
+    results_history: str,
+    best_bpb: float,
+    experiment_num: int,
+    crash_info: str | None = None,
+) -> str:
     program_text = Path(PROGRAM_FILE).read_text(encoding="utf-8")
     tunable_block = extract_tunable_block(train_code)
     crash_section = f"Last crash info:\n{crash_info}\n" if crash_info else ""
+    target_family = choose_target_family(results_history, experiment_num)
     return f"""You are an autonomous ML researcher running local PTNCN experiments.
 
 Current best val_bpb: {best_bpb:.6f}
+Current experiment number: {experiment_num}
+Required exploration family for this step: {target_family}
 
 You may only edit the tunable block inside train.py.
 
@@ -207,7 +253,8 @@ exact old text
 new text
 >>>
 
-Make one focused change. Keep edits small and valid Python."""
+Make one focused change. Keep edits small and valid Python.
+Prefer a change from the required exploration family unless the crash context strongly suggests a safer fix."""
 
 
 def main() -> None:
@@ -245,7 +292,7 @@ def main() -> None:
         results_history = get_results_history()
         crash_context = get_crash_info() if consecutive_crashes > 0 else None
 
-        prompt = build_experiment_prompt(train_code, results_history, best_bpb, crash_context)
+        prompt = build_experiment_prompt(train_code, results_history, best_bpb, experiment_num, crash_context)
         print("  Querying local model...")
         response = query_llm(prompt)
         if not response:
