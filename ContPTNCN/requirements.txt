@@ -1,0 +1,4 @@
+torch>=2.0.0
+torchtext>=0.15.0
+matplotlib>=3.0.0
+pytest>=7.0.0

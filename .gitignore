@@ -1,6 +1,7 @@
 # env setup
 .venv/
 __pycache__/
+.claude
 
 # cache files
 *.pyc
