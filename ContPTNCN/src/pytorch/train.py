@@ -55,9 +55,11 @@ def evaluate(model: EmbeddingPTNCN, loader: WikiTextLoader, device: torch.device
                 total_loss    += loss.item() * tokens.shape[0]
                 n_tokens      += tokens.shape[0]
 
-    ppl = math.exp(total_loss / n_tokens)
+    avg_loss = total_loss / n_tokens
+    ppl = math.exp(avg_loss)
+    bpc = avg_loss / math.log(2)
     acc = total_correct / n_tokens
-    return ppl, acc
+    return ppl, bpc, acc
 
 
 def train():
@@ -125,21 +127,24 @@ def train():
                 avg_loss = running_loss / (LOG_INTERVAL * T)
                 avg_acc  = running_correct / running_tokens
                 ppl      = math.exp(avg_loss)
+                bpc      = avg_loss / math.log(2)
                 print(f"  epoch {epoch} | batch {batch_idx+1:>5d} | "
-                      f"loss {avg_loss:.4f} | ppl {ppl:>8.2f} | acc {avg_acc:.4f}")
+                      f"loss {avg_loss:.4f} | ppl {ppl:>8.2f} | bpc {bpc:.4f} | acc {avg_acc:.4f}")
                 running_loss = running_correct = running_tokens = 0
 
-        train_ppl = math.exp(epoch_loss / epoch_tokens)
+        train_loss = epoch_loss / epoch_tokens
+        train_ppl = math.exp(train_loss)
+        train_bpc = train_loss / math.log(2)
         train_acc = epoch_correct / epoch_tokens
-        val_ppl, val_acc = evaluate(model, val_loader, device)
+        val_ppl, val_bpc, val_acc = evaluate(model, val_loader, device)
         model._clear_state()        # restore state after eval
         print(f"Epoch {epoch} done | "
-              f"train ppl {train_ppl:.2f} acc {train_acc:.4f} | "
-              f"val ppl {val_ppl:.2f} acc {val_acc:.4f}")
+              f"train ppl {train_ppl:.2f} bpc {train_bpc:.4f} acc {train_acc:.4f} | "
+              f"val ppl {val_ppl:.2f} bpc {val_bpc:.4f} acc {val_acc:.4f}")
 
     # ── Test evaluation ───────────────────────────────────────────────────────
-    test_ppl, test_acc = evaluate(model, test_loader, device)
-    print(f"\nTest perplexity: {test_ppl:.2f} | accuracy: {test_acc:.4f}")
+    test_ppl, test_bpc, test_acc = evaluate(model, test_loader, device)
+    print(f"\nTest perplexity: {test_ppl:.2f} | bpc: {test_bpc:.4f} | accuracy: {test_acc:.4f}")
 
 
 if __name__ == "__main__":
