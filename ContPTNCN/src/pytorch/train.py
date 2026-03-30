@@ -9,11 +9,12 @@ import math
 import torch
 import torch.nn.functional as F
 
-from data_module import WikiTextLoader, load_wikitext2
+from data_module import WikiTextLoader, load_wikitext2, load_ptb
 from network import EmbeddingPTNCN
 
 # ── Hyperparameters ──────────────────────────────────────────────────────────
-VOCAB_SIZE  = 10_000    # must match max_tokens in build_vocab
+DATASET     = "ptb"   # "wikitext2" or "ptb"
+VOCAB_SIZE  = None          # set automatically from vocab after loading
 EMB_DIM     = 64
 HID_DIM     = 256
 
@@ -21,7 +22,7 @@ BATCH_SIZE  = 32
 SEQ_LEN     = 35        # number of timesteps per chunk (like standard LM)
 N_EPOCHS    = 5
 
-ALPHA       = 0.001     # LRA learning rate
+ALPHA       = 0.001 / BATCH_SIZE   # LRA learning rate (per-sample scale)
 XI          = 0.4       # Hebbian regularisation strength
 BETA        = 0.1       # LRA target shift
 GAMMA       = 0.01
@@ -31,11 +32,12 @@ LOG_INTERVAL = 200      # print every N batches
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def evaluate(model: EmbeddingPTNCN, loader: WikiTextLoader, device: torch.device) -> float:
-    """Return perplexity on a data split (no weight updates)."""
+def evaluate(model: EmbeddingPTNCN, loader: WikiTextLoader, device: torch.device):
+    """Return (perplexity, accuracy) on a data split (no weight updates)."""
     model._clear_state()
-    total_loss = 0.0
-    n_tokens   = 0
+    total_loss    = 0.0
+    total_correct = 0
+    n_tokens      = 0
 
     with torch.no_grad():
         for batch in loader:
@@ -48,10 +50,14 @@ def evaluate(model: EmbeddingPTNCN, loader: WikiTextLoader, device: torch.device
                 logits = model(tokens[:, t], mask,
                                beta=BETA, gamma=GAMMA, lambda_val=LAMBDA_VAL)
                 loss = F.cross_entropy(logits, labels[:, t])
-                total_loss += loss.item() * tokens.shape[0]
-                n_tokens   += tokens.shape[0]
+                preds = logits.argmax(dim=-1)             # (B,)
+                total_correct += (preds == labels[:, t]).sum().item()
+                total_loss    += loss.item() * tokens.shape[0]
+                n_tokens      += tokens.shape[0]
 
-    return math.exp(total_loss / n_tokens)
+    ppl = math.exp(total_loss / n_tokens)
+    acc = total_correct / n_tokens
+    return ppl, acc
 
 
 def train():
@@ -61,17 +67,21 @@ def train():
     print(f"Device: {device}")
 
     # ── Data ─────────────────────────────────────────────────────────────────
-    print("Loading WikiText-2 …")
-    train_ids, val_ids, test_ids, vocab = load_wikitext2()
+    loaders = {"wikitext2": load_wikitext2, "ptb": load_ptb}
+    if DATASET not in loaders:
+        raise ValueError(f"Unknown dataset '{DATASET}'. Choose from: {list(loaders)}")
+    print(f"Loading {DATASET} …")
+    train_ids, val_ids, test_ids, vocab = loaders[DATASET]()
+    vocab_size = len(vocab)
     print(f"  train tokens: {len(train_ids):,}  |  val: {len(val_ids):,}  |  test: {len(test_ids):,}")
-    print(f"  vocab size:   {len(vocab):,}")
+    print(f"  vocab size:   {vocab_size:,}")
 
     train_loader = WikiTextLoader(train_ids, batch_size=BATCH_SIZE, seq_len=SEQ_LEN, shuffle=False)
     val_loader   = WikiTextLoader(val_ids,   batch_size=BATCH_SIZE, seq_len=SEQ_LEN)
     test_loader  = WikiTextLoader(test_ids,  batch_size=BATCH_SIZE, seq_len=SEQ_LEN)
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    model = EmbeddingPTNCN(vocab_size=VOCAB_SIZE, emb_dim=EMB_DIM, hid_dim=HID_DIM)
+    model = EmbeddingPTNCN(vocab_size=vocab_size, emb_dim=EMB_DIM, hid_dim=HID_DIM)
     model = model.to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  parameters: {n_params:,}")
@@ -79,9 +89,12 @@ def train():
     # ── Training loop ─────────────────────────────────────────────────────────
     for epoch in range(1, N_EPOCHS + 1):
         model._clear_state()        # reset temporal state at epoch start
-        epoch_loss = 0.0
-        epoch_tokens = 0
-        running_loss = 0.0
+        epoch_loss    = 0.0
+        epoch_correct = 0
+        epoch_tokens  = 0
+        running_loss    = 0.0
+        running_correct = 0
+        running_tokens  = 0
 
         for batch_idx, batch in enumerate(train_loader):
             tokens = batch.tokens.to(device)   # (B, T)
@@ -90,34 +103,43 @@ def train():
             T = tokens.shape[1]
 
             for t in range(T):
-                logits = model(tokens[:, t], mask,
-                               beta=BETA, gamma=GAMMA, lambda_val=LAMBDA_VAL)
-
-                # cross-entropy for monitoring only — no .backward()
+                # PTNCN never calls .backward() — no_grad prevents graph build-up
                 with torch.no_grad():
-                    loss = F.cross_entropy(logits, labels[:, t])
+                    logits = model(tokens[:, t], mask,
+                                   beta=BETA, gamma=GAMMA, lambda_val=LAMBDA_VAL)
+                    loss  = F.cross_entropy(logits, labels[:, t])
+                    preds = logits.argmax(dim=-1)           # (B,)
+                    correct = (preds == labels[:, t]).sum().item()
 
                 model.compute_updates(alpha=ALPHA, xi=XI)
 
-                running_loss += loss.item()
-                epoch_loss   += loss.item() * tokens.shape[0]
-                epoch_tokens += tokens.shape[0]
+                B_t = tokens.shape[0]
+                running_loss    += loss.item()
+                running_correct += correct
+                running_tokens  += B_t
+                epoch_loss      += loss.item() * B_t
+                epoch_correct   += correct
+                epoch_tokens    += B_t
 
             if (batch_idx + 1) % LOG_INTERVAL == 0:
-                avg = running_loss / (LOG_INTERVAL * T)
-                ppl = math.exp(avg)
+                avg_loss = running_loss / (LOG_INTERVAL * T)
+                avg_acc  = running_correct / running_tokens
+                ppl      = math.exp(avg_loss)
                 print(f"  epoch {epoch} | batch {batch_idx+1:>5d} | "
-                      f"loss {avg:.4f} | ppl {ppl:>8.2f}")
-                running_loss = 0.0
+                      f"loss {avg_loss:.4f} | ppl {ppl:>8.2f} | acc {avg_acc:.4f}")
+                running_loss = running_correct = running_tokens = 0
 
         train_ppl = math.exp(epoch_loss / epoch_tokens)
-        val_ppl   = evaluate(model, val_loader, device)
+        train_acc = epoch_correct / epoch_tokens
+        val_ppl, val_acc = evaluate(model, val_loader, device)
         model._clear_state()        # restore state after eval
-        print(f"Epoch {epoch} done | train ppl {train_ppl:.2f} | val ppl {val_ppl:.2f}")
+        print(f"Epoch {epoch} done | "
+              f"train ppl {train_ppl:.2f} acc {train_acc:.4f} | "
+              f"val ppl {val_ppl:.2f} acc {val_acc:.4f}")
 
     # ── Test evaluation ───────────────────────────────────────────────────────
-    test_ppl = evaluate(model, test_loader, device)
-    print(f"\nTest perplexity: {test_ppl:.2f}")
+    test_ppl, test_acc = evaluate(model, test_loader, device)
+    print(f"\nTest perplexity: {test_ppl:.2f} | accuracy: {test_acc:.4f}")
 
 
 if __name__ == "__main__":

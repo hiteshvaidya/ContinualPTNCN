@@ -109,12 +109,13 @@ class PTNCN(nn.Module):
 
     def forward(self, x, mask, beta=0.1, alpha=0.001, gamma=0.01, lambda_val=0.01):
         B = x.shape[0]
+        device = self.M1.device   # always matches wherever parameters live
 
         if self.zf1 is None:
             # first timestep - no previous state exists yet
             # create zero tensors of the right shape as stand-ins
-            pad_h = torch.zeros(B, self.hid_dim, device=self.device)
-            pad_x = torch.zeros(B, self.in_dim, device=self.device)
+            pad_h = torch.zeros(B, self.hid_dim, device=device)
+            pad_x = torch.zeros(B, self.in_dim, device=device)
             self.zf0_tm1 = pad_x
             self.zf1_tm1 = pad_h
             self.zf2_tm1 = pad_h
@@ -140,8 +141,8 @@ class PTNCN(nn.Module):
         self.z2 = self.zf2_tm1 @ self.V2 + self.zf1_tm1 @ self.M2
         h_s = self.act_fx(self.z2)
         if self.A2 is None:
-            self.A2 = torch.zeros(self.hid_dim, self.hid_dim, device=self.device)
-        self.A2 = self.fwt_lambda * self.A2 + self.fwt_eta * (h_s.T @ h_s)
+            self.A2 = torch.zeros(self.hid_dim, self.hid_dim, device=device)
+        self.A2 = self.fwt_lambda * self.A2 + self.fwt_eta * (h_s.T @ h_s) / B
         for s in range(self.fwt_S):
             h_s = self.act_fx(F.layer_norm(self.z2 + h_s @ self.A2, (self.hid_dim,)))
         self.zf2 = h_s
@@ -155,8 +156,8 @@ class PTNCN(nn.Module):
         self.z1 = u1_term + self.zf1_tm1 @ self.V1 + self.zf0_tm1 @ self.M1
         h_s = self.act_fx(self.z1)
         if self.A1 is None:
-            self.A1 = torch.zeros(self.hid_dim, self.hid_dim, device=self.device)
-        self.A1 = self.fwt_lambda * self.A1 + self.fwt_eta * (h_s.T @ h_s)
+            self.A1 = torch.zeros(self.hid_dim, self.hid_dim, device=device)
+        self.A1 = self.fwt_lambda * self.A1 + self.fwt_eta * (h_s.T @ h_s) / B
         for s in range(self.fwt_S):
             h_s = self.act_fx(F.layer_norm(self.z1 + h_s @ self.A1, (self.hid_dim,)))
         self.zf1 = h_s

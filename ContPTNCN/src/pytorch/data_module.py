@@ -16,38 +16,75 @@ import torch
 import torch.nn as nn
 
 
+def _tokenize(line: str) -> list[str]:
+    """Basic English tokenizer: lowercase + split on whitespace/punctuation."""
+    import re
+    return re.findall(r"[a-z]+|[0-9]+|[^\w\s]", line.lower())
+
+
+def build_vocab(train_lines: list[str], max_tokens: int = 10_000) -> dict:
+    """Build a {token: index} vocab from training lines."""
+    from collections import Counter
+    counter: Counter = Counter()
+    for line in train_lines:
+        counter.update(_tokenize(line))
+    specials = ['<unk>', '<eos>']
+    # most common tokens up to max_tokens (excluding specials)
+    most_common = [tok for tok, _ in counter.most_common(max_tokens - len(specials))]
+    tokens = specials + most_common
+    return {tok: idx for idx, tok in enumerate(tokens)}
+
+
+def encode(lines: Iterable[str], vocab: dict) -> list[int]:
+    """Convert lines of text to a flat list of token ids."""
+    unk_id = vocab['<unk>']
+    eos_id = vocab['<eos>']
+    ids: list[int] = []
+    for line in lines:
+        ids += [vocab.get(tok, unk_id) for tok in _tokenize(line)]
+        ids.append(eos_id)
+    return ids
+
+
 def load_wikitext2():
-    # Lazy imports so that data_module can be imported without torchtext installed
-    from torchtext.datasets import WikiText2
-    from torchtext.data.utils import get_tokenizer
-    from torchtext.vocab import build_vocab_from_iterator
+    from datasets import load_dataset
+    ds = load_dataset("wikitext", "wikitext-2-raw-v1")
+    train_lines = ds["train"]["text"]
+    val_lines   = ds["validation"]["text"]
+    test_lines  = ds["test"]["text"]
+    vocab     = build_vocab(train_lines)
+    train_ids = encode(train_lines, vocab)
+    val_ids   = encode(val_lines,   vocab)
+    test_ids  = encode(test_lines,  vocab)
+    return train_ids, val_ids, test_ids, vocab
 
-    tokenizer = get_tokenizer("basic_english")
 
-    def _build_vocab(train_lines: list[str]):
-        def _yield(lines):
-            for line in lines:
-                yield tokenizer(line)
-        vocab = build_vocab_from_iterator(
-            _yield(train_lines),
-            specials=['<unk>', '<eos>'],
-            max_tokens=10_000
-        )
-        vocab.set_default_index(vocab['<unk>'])
-        return vocab
+def load_ptb(data_dir: str = "../../data/ptb_char"):
+    """
+    Load the pre-encoded character-level PTB dataset.
+    Each line in the files is a comma-separated sequence of integer token ids.
+    Returns flat token id lists and a vocab dict {idx: char} built from vocab.txt.
+    """
+    import os
+    def _read_ids(path: str) -> list[int]:
+        ids: list[int] = []
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    ids += [int(x) for x in line.split(",")]
+        return ids
 
-    def _encode(data_iter: Iterable[str], vocab) -> list[int]:
-        tokens = []
-        for line in data_iter:
-            tokens += vocab(tokenizer(line)) + [vocab['<eos>']]
-        return tokens
+    train_ids = _read_ids(os.path.join(data_dir, "trainX.txt"))
+    val_ids   = _read_ids(os.path.join(data_dir, "validX.txt"))
+    test_ids  = _read_ids(os.path.join(data_dir, "testX.txt"))
 
-    train_iter, val_iter, test_iter = WikiText2()
-    train_lines = list(train_iter)   # buffer so we can iterate twice
-    vocab = _build_vocab(train_lines)
-    train_ids = _encode(train_lines, vocab)
-    val_ids   = _encode(val_iter, vocab)
-    test_ids  = _encode(test_iter, vocab)
+    # Build vocab dict from vocab.txt for size reporting
+    vocab_path = os.path.join(data_dir, "vocab.txt")
+    with open(vocab_path) as f:
+        chars = [line.rstrip("\n") for line in f]
+    vocab = {i: ch for i, ch in enumerate(chars)}
+
     return train_ids, val_ids, test_ids, vocab
 
 @dataclass
