@@ -27,6 +27,7 @@ XI          = 0.4       # Hebbian regularisation strength
 BETA        = 0.1       # LRA target shift
 GAMMA       = 0.01
 LAMBDA_VAL  = 0.01
+CLIP_NORM   = 1.0       # max Frobenius norm per LRA update matrix; None to disable
 
 LOG_INTERVAL = 200      # print every N batches
 # ─────────────────────────────────────────────────────────────────────────────
@@ -113,7 +114,7 @@ def train():
                     preds = logits.argmax(dim=-1)           # (B,)
                     correct = (preds == labels[:, t]).sum().item()
 
-                model.compute_updates(alpha=ALPHA, xi=XI)
+                model.compute_updates(alpha=ALPHA, xi=XI, max_norm=CLIP_NORM)
 
                 B_t = tokens.shape[0]
                 running_loss    += loss.item()
@@ -138,9 +139,17 @@ def train():
         train_acc = epoch_correct / epoch_tokens
         val_ppl, val_bpc, val_acc = evaluate(model, val_loader, device)
         model._clear_state()        # restore state after eval
+
+        stats = model.weight_stats()
+        w_norms = " ".join(f"{k.replace('ptncn.','').replace('_norm','')}={v:.2f}"
+                           for k, v in stats.items() if k.endswith("_norm"))
+        w_maxes = " ".join(f"{k.replace('ptncn.','').replace('_max','')}={v:.3f}"
+                           for k, v in stats.items() if k.endswith("_max"))
         print(f"Epoch {epoch} done | "
               f"train ppl {train_ppl:.2f} bpc {train_bpc:.4f} acc {train_acc:.4f} | "
               f"val ppl {val_ppl:.2f} bpc {val_bpc:.4f} acc {val_acc:.4f}")
+        print(f"  weight norms : {w_norms}")
+        print(f"  weight maxabs: {w_maxes}")
 
     # ── Test evaluation ───────────────────────────────────────────────────────
     test_ppl, test_bpc, test_acc = evaluate(model, test_loader, device)

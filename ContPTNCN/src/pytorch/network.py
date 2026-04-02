@@ -176,24 +176,43 @@ class PTNCN(nn.Module):
 
         return z0_o_logits, z0_o
         
-    def compute_updates(self, alpha=0.001, xi=0.4):
+    @staticmethod
+    def _clip(delta: torch.Tensor, max_norm: float) -> torch.Tensor:
+        norm = torch.linalg.norm(delta)
+        return delta * (max_norm / norm.clamp(min=max_norm)) if norm > max_norm else delta
+
+    def compute_updates(self, alpha=0.001, xi=0.4, max_norm: float | None = None):
         with torch.no_grad():
-            self.M2.data -= alpha * self.zf1_tm1.T @ self.e2y
-            self.V2.data -= alpha * self.zf2_tm1.T @ self.e2y
-            self.M1.data -= alpha * self.zf0_tm1.T @ self.e1y
-            self.V1.data -= alpha * self.zf1_tm1.T @ self.e1y
+            def apply(param, delta):
+                if max_norm is not None:
+                    delta = self._clip(delta, max_norm)
+                param.data -= alpha * delta
+
+            apply(self.M2, self.zf1_tm1.T @ self.e2y)
+            apply(self.V2, self.zf2_tm1.T @ self.e2y)
+            apply(self.M1, self.zf0_tm1.T @ self.e1y)
+            apply(self.V1, self.zf1_tm1.T @ self.e1y)
             if self.zeta > 0.0:
-                self.U1.data -= alpha * self.zf2_tm1.T @ self.e1y
+                apply(self.U1, self.zf2_tm1.T @ self.e1y)
             mat = self.zf2.T @ self.zf1_tm1
             norm = torch.linalg.norm(mat)
             hebb_factor2 = - mat / norm if norm > 0 else torch.zeros_like(mat)
-            self.W2.data -= alpha * (self.zf2.T @ self.e1 + xi * hebb_factor2)
+            apply(self.W2, self.zf2.T @ self.e1 + xi * hebb_factor2)
             mat = self.zf1.T @ self.zf0_tm1
             norm = torch.linalg.norm(mat)
             hebb_factor1 = - mat / norm if norm > 0 else torch.zeros_like(mat)
-            self.W1.data -= alpha * (self.zf1.T @ self.e0 + xi * hebb_factor1)
-            self.E2.data -= alpha * self.e1.T @ (self.e2y - self.e2y_tm1)
-            self.E1.data -= alpha * self.e0.T @ (self.e1y - self.e1y_tm1)
+            apply(self.W1, self.zf1.T @ self.e0 + xi * hebb_factor1)
+            apply(self.E2, self.e1.T @ (self.e2y - self.e2y_tm1))
+            apply(self.E1, self.e0.T @ (self.e1y - self.e1y_tm1))
+
+    def weight_stats(self) -> dict[str, float]:
+        """Return Frobenius norm and max-abs for each weight matrix (for divergence monitoring)."""
+        stats = {}
+        for name, param in self.named_parameters():
+            data = param.data
+            stats[f"{name}_norm"] = torch.linalg.norm(data).item()
+            stats[f"{name}_max"]  = data.abs().max().item()
+        return stats
 
 class EmbeddingPTNCN(nn.Module):
     def __init__(self,
@@ -221,6 +240,9 @@ class EmbeddingPTNCN(nn.Module):
         self.ptncn._clear_state()
         
 
-    def compute_updates(self, alpha=0.001, xi=0.4):
-        self.ptncn.compute_updates(alpha=alpha, xi=xi)
+    def compute_updates(self, alpha=0.001, xi=0.4, max_norm: float | None = None):
+        self.ptncn.compute_updates(alpha=alpha, xi=xi, max_norm=max_norm)
+
+    def weight_stats(self) -> dict[str, float]:
+        return self.ptncn.weight_stats()
         
